@@ -11,7 +11,12 @@ A robust Go-based monitoring service designed to track the health of multiple in
 - **Dual Database Support**: Works with MongoDB Atlas or SQL (PostgreSQL/MySQL).
 - **Service Management Script**: Easy `service.sh` for background execution and daily logging.
 
-## 🛡️ Security Implementation
+## � Service Agent
+
+This master service requires the **Service Monitor Agent** to be installed on the nodes you wish to monitor.
+- **Agent Repository**: [service-monitor-agent-go](https://github.com/anggialansori404/service-monitor-agent-go)
+
+## �🛡️ Security Implementation
 
 The system is equipped with advanced security measures to protect against automated attacks:
 
