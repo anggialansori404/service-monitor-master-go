@@ -65,6 +65,8 @@ type GlobalSetting struct {
 	ID                   string    `json:"id" bson:"_id,omitempty" gorm:"primaryKey"`
 	TelegramBotToken     string    `json:"telegram_bot_token" bson:"telegram_bot_token"`
 	TelegramChatID       string    `json:"telegram_chat_id" bson:"telegram_chat_id"`
+	TelegramTopicID      string    `json:"telegram_topic_id" bson:"telegram_topic_id"`
 	EnableTelegramAlerts bool      `json:"enable_telegram_alerts" bson:"enable_telegram_alerts"`
 	UpdatedAt            time.Time `json:"updated_at" bson:"updated_at"`
 }
+

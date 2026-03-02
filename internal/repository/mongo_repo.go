@@ -668,6 +668,7 @@ func (r *MongoRepository) GetSettings(ctx context.Context) (*models.GlobalSettin
 		ID                   interface{} `bson:"_id"`
 		TelegramBotToken     string      `bson:"telegram_bot_token"`
 		TelegramChatID       string      `bson:"telegram_chat_id"`
+		TelegramTopicID      string      `bson:"telegram_topic_id"`
 		EnableTelegramAlerts bool        `bson:"enable_telegram_alerts"`
 		UpdatedAt            time.Time   `bson:"updated_at"`
 	}
@@ -688,6 +689,7 @@ func (r *MongoRepository) GetSettings(ctx context.Context) (*models.GlobalSettin
 		ID:                   docID,
 		TelegramBotToken:     doc.TelegramBotToken,
 		TelegramChatID:       doc.TelegramChatID,
+		TelegramTopicID:      doc.TelegramTopicID,
 		EnableTelegramAlerts: doc.EnableTelegramAlerts,
 		UpdatedAt:            doc.UpdatedAt,
 	}
@@ -699,6 +701,7 @@ func (r *MongoRepository) UpdateSettings(ctx context.Context, setting *models.Gl
 		"$set": bson.M{
 			"telegram_bot_token":     setting.TelegramBotToken,
 			"telegram_chat_id":       setting.TelegramChatID,
+			"telegram_topic_id":      setting.TelegramTopicID,
 			"enable_telegram_alerts": setting.EnableTelegramAlerts,
 			"updated_at":             setting.UpdatedAt,
 		},

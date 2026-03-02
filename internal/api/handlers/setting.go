@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
@@ -33,6 +34,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	var input struct {
 		TelegramBotToken     string `json:"telegram_bot_token"`
 		TelegramChatID       string `json:"telegram_chat_id"`
+		TelegramTopicID      string `json:"telegram_topic_id"`
 		EnableTelegramAlerts bool   `json:"enable_telegram_alerts"`
 	}
 
@@ -44,7 +46,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	setting := models.GlobalSetting{
 		TelegramBotToken:     input.TelegramBotToken,
 		TelegramChatID:       input.TelegramChatID,
+		TelegramTopicID:      input.TelegramTopicID,
 		EnableTelegramAlerts: input.EnableTelegramAlerts,
+		UpdatedAt:            time.Now(),
 	}
 
 	err := h.Repo.UpdateSettings(c.Request.Context(), &setting)

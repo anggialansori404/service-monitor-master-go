@@ -90,7 +90,7 @@ func (h *AgentHandler) Sync(c *gin.Context) {
 						inst.Name, svc.Name, time.Now().Format("02 Jan 2006 15:04:05"))
 				}
 				if setting, err := h.Repo.GetSettings(c.Request.Context()); err == nil && setting.EnableTelegramAlerts {
-					services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, msg)
+					services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msg)
 				}
 			}
 
@@ -169,7 +169,7 @@ func (h *AgentHandler) Alert(c *gin.Context) {
 					inst.Name, req.Service, time.Now().Format("02 Jan 2006 15:04:05"))
 			}
 			if setting, err := h.Repo.GetSettings(c.Request.Context()); err == nil && setting.EnableTelegramAlerts {
-				services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, msg)
+				services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msg)
 			}
 		}
 

@@ -72,7 +72,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
 
 		if setting, err := h.Repo.GetSettings(context.Background()); err == nil && setting.EnableTelegramAlerts {
-			services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, alertMsg)
+			services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, alertMsg)
 		}
 	}()
 

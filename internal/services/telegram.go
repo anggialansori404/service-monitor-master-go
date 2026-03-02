@@ -9,7 +9,7 @@ import (
 )
 
 // SendTelegramAlert sends a markdown-formatted alert message to a Telegram chat.
-func SendTelegramAlert(token, chatID, message string) {
+func SendTelegramAlert(token, chatID, topicID, message string) {
 	if token == "" || chatID == "" {
 		return
 	}
@@ -19,6 +19,10 @@ func SendTelegramAlert(token, chatID, message string) {
 		"chat_id":    chatID,
 		"text":       message,
 		"parse_mode": "Markdown",
+	}
+
+	if topicID != "" {
+		payload["message_thread_id"] = topicID
 	}
 
 	body, err := json.Marshal(payload)
@@ -38,3 +42,4 @@ func SendTelegramAlert(token, chatID, message string) {
 		log.Printf("Telegram API returned non-200 status: %d", resp.StatusCode)
 	}
 }
+
