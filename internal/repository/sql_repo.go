@@ -237,6 +237,14 @@ func (r *SQLRepository) CreateAuditLog(ctx context.Context, log *models.AuditLog
 	}
 	return r.db.WithContext(ctx).Create(log).Error
 }
+// --- SecurityLog ---
+
+func (r *SQLRepository) CreateSecurityLog(ctx context.Context, log *models.SecurityLog) error {
+	if log.ID == "" {
+		log.ID = generateID()
+	}
+	return r.db.WithContext(ctx).Create(log).Error
+}
 
 // --- Auth ---
 
@@ -370,4 +378,25 @@ func (r *SQLRepository) UpdateSettings(ctx context.Context, setting *models.Glob
 	existing.UpdatedAt = time.Now()
 
 	return r.db.WithContext(ctx).Save(&existing).Error
+}
+
+// --- Blacklist ---
+
+func (r *SQLRepository) BlacklistIP(ctx context.Context, ip string, reason string) error {
+	blacklisted := models.BlacklistedIP{
+		ID:        generateID(),
+		IP:        ip,
+		Reason:    reason,
+		CreatedAt: time.Now(),
+	}
+	return r.db.WithContext(ctx).Create(&blacklisted).Error
+}
+
+func (r *SQLRepository) IsIPBlacklisted(ctx context.Context, ip string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.BlacklistedIP{}).Where("ip = ?", ip).Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

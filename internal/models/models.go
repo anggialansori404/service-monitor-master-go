@@ -69,4 +69,20 @@ type GlobalSetting struct {
 	EnableTelegramAlerts bool      `json:"enable_telegram_alerts" bson:"enable_telegram_alerts"`
 	UpdatedAt            time.Time `json:"updated_at" bson:"updated_at"`
 }
+// SecurityLog records suspicious access attempts.
+type SecurityLog struct {
+	ID        string    `json:"id" bson:"_id,omitempty" gorm:"primaryKey"`
+	IP        string    `json:"ip" bson:"ip"`
+	Path      string    `json:"path" bson:"path"`
+	Method    string    `json:"method" bson:"method"`
+	UserAgent string    `json:"user_agent" bson:"user_agent"`
+	Timestamp time.Time `json:"timestamp" bson:"timestamp"`
+}
 
+// BlacklistedIP represents an IP address that is blocked from accessing the system.
+type BlacklistedIP struct {
+	ID        string    `json:"id" bson:"_id,omitempty" gorm:"primaryKey"`
+	IP        string    `json:"ip" bson:"ip"`
+	Reason    string    `json:"reason" bson:"reason"`
+	CreatedAt time.Time `json:"created_at" bson:"created_at"`
+}

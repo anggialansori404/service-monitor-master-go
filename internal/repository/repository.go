@@ -34,6 +34,8 @@ type Repository interface {
 
 	// AuditLog
 	CreateAuditLog(ctx context.Context, log *models.AuditLog) error
+	// SecurityLog
+	CreateSecurityLog(ctx context.Context, log *models.SecurityLog) error
 
 	// Auth
 	GetInstitutionByAgentIDAndSecret(ctx context.Context, agentID, secretKey string) (*models.Institution, error)
@@ -48,4 +50,7 @@ type Repository interface {
 	// Settings
 	GetSettings(ctx context.Context) (*models.GlobalSetting, error)
 	UpdateSettings(ctx context.Context, setting *models.GlobalSetting) error
+	// Blacklist
+	BlacklistIP(ctx context.Context, ip string, reason string) error
+	IsIPBlacklisted(ctx context.Context, ip string) (bool, error)
 }

@@ -45,3 +45,7 @@ monitoring-server-linux-amd64.bin
 monitoring-server.exe
 test.exe
 tmp_test_oid.go
+
+# Service logs and PID
+logs/
+service.pid

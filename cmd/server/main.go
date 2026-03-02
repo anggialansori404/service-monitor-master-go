@@ -90,6 +90,8 @@ func main() {
 			&models.AuditLog{},
 			&models.User{},
 			&models.GlobalSetting{},
+			&models.SecurityLog{},
+			&models.BlacklistedIP{},
 		)
 		if err != nil {
 			log.Fatalf("failed to auto-migrate database: %v", err)
@@ -124,9 +126,10 @@ func main() {
 	r := gin.Default()
 
 	// --- Security Middleware ---
+	r.Use(middleware.IPBlacklist(repo))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.GlobalRateLimiter())
-
+	r.Use(middleware.SuspiciousPathLogger(repo))
 	// --- Custom Tarpit 404 NoRoute ---
 	r.NoRoute(func(c *gin.Context) {
 		// Delay 1 second to slow down scanners (Masscan, FFuf, Nuclei, Nikto)

@@ -455,6 +455,16 @@ func (r *MongoRepository) CreateAuditLog(ctx context.Context, log *models.AuditL
 	_, err := coll.InsertOne(ctx, log)
 	return err
 }
+// --- SecurityLog ---
+
+func (r *MongoRepository) CreateSecurityLog(ctx context.Context, log *models.SecurityLog) error {
+	coll := r.db.Collection("security_logs")
+	if log.ID == "" {
+		log.ID = bson.NewObjectID().Hex()
+	}
+	_, err := coll.InsertOne(ctx, log)
+	return err
+}
 
 // --- Auth ---
 
@@ -709,4 +719,27 @@ func (r *MongoRepository) UpdateSettings(ctx context.Context, setting *models.Gl
 	opts := options.UpdateOne().SetUpsert(true)
 	_, err := r.db.Collection("settings").UpdateOne(ctx, bson.M{}, update, opts)
 	return err
+}
+
+// --- Blacklist ---
+
+func (r *MongoRepository) BlacklistIP(ctx context.Context, ip string, reason string) error {
+	coll := r.db.Collection("blacklisted_ips")
+	blacklisted := models.BlacklistedIP{
+		ID:        bson.NewObjectID().Hex(),
+		IP:        ip,
+		Reason:    reason,
+		CreatedAt: time.Now(),
+	}
+	_, err := coll.InsertOne(ctx, blacklisted)
+	return err
+}
+
+func (r *MongoRepository) IsIPBlacklisted(ctx context.Context, ip string) (bool, error) {
+	coll := r.db.Collection("blacklisted_ips")
+	count, err := coll.CountDocuments(ctx, bson.M{"ip": ip})
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
