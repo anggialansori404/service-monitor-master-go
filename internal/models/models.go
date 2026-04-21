@@ -37,6 +37,14 @@ type Service struct {
 	Institution *Institution `json:"-" bson:"-" gorm:"foreignKey:InstitutionID"`
 }
 
+// DashboardSummaryResponse represents the aggregated dashboard data.
+type DashboardSummaryResponse struct {
+	TotalInstitutions int64 `json:"total_institutions"`
+	TotalServices     int64 `json:"total_services"`
+	TotalUp           int64 `json:"total_up"`
+	TotalDown         int64 `json:"total_down"`
+}
+
 // AuditLog records actions performed on services.
 type AuditLog struct {
 	ID              string    `json:"id" bson:"_id,omitempty" gorm:"primaryKey"`

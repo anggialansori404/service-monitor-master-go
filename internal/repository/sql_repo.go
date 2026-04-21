@@ -75,6 +75,25 @@ func (r *SQLRepository) GetAllInstitutions() ([]models.Institution, error) {
 	return institutions, nil
 }
 
+func (r *SQLRepository) GetDashboardSummary(ctx context.Context) (*models.DashboardSummaryResponse, error) {
+	var summary models.DashboardSummaryResponse
+	
+	if err := r.db.WithContext(ctx).Model(&models.Institution{}).Count(&summary.TotalInstitutions).Error; err != nil {
+		return nil, err
+	}
+	if err := r.db.WithContext(ctx).Model(&models.Service{}).Count(&summary.TotalServices).Error; err != nil {
+		return nil, err
+	}
+	if err := r.db.WithContext(ctx).Model(&models.Service{}).Where("status = ?", "UP").Count(&summary.TotalUp).Error; err != nil {
+		return nil, err
+	}
+	if err := r.db.WithContext(ctx).Model(&models.Service{}).Where("status IN ?", []string{"DOWN", "ERROR"}).Count(&summary.TotalDown).Error; err != nil {
+		return nil, err
+	}
+	
+	return &summary, nil
+}
+
 func (r *SQLRepository) UpdateInstitutionPing(ctx context.Context, id string, hwInfo *models.HardwareInfo, t time.Time) error {
 	updateFields := map[string]interface{}{
 		"last_ping": t,

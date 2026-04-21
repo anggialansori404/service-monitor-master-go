@@ -181,6 +181,56 @@ func (r *MongoRepository) GetAllInstitutions() ([]models.Institution, error) {
 	return institutions, nil
 }
 
+func (r *MongoRepository) GetDashboardSummary(ctx context.Context) (*models.DashboardSummaryResponse, error) {
+	// Dashboard Aggregation - Created by Kang Anggi
+	coll := r.db.Collection("services")
+	pipeline := mongo.Pipeline{
+		{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: nil},
+			{Key: "total_services", Value: bson.D{{Key: "$sum", Value: 1}}},
+			{Key: "total_up", Value: bson.D{{Key: "$sum", Value: bson.D{
+				{Key: "$cond", Value: bson.A{bson.D{{Key: "$eq", Value: bson.A{"$status", "UP"}}}, 1, 0}},
+			}}}},
+			{Key: "total_down", Value: bson.D{{Key: "$sum", Value: bson.D{
+				{Key: "$cond", Value: bson.A{bson.D{{Key: "$in", Value: bson.A{"$status", bson.A{"DOWN", "ERROR"}}}}, 1, 0}},
+			}}}},
+		}}},
+	}
+
+	cursor, err := coll.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var result []struct {
+		TotalServices int64 `bson:"total_services"`
+		TotalUp       int64 `bson:"total_up"`
+		TotalDown     int64 `bson:"total_down"`
+	}
+
+	if err := cursor.All(ctx, &result); err != nil {
+		return nil, err
+	}
+
+	totalInstitutions, err := r.db.Collection("institutions").CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &models.DashboardSummaryResponse{
+		TotalInstitutions: totalInstitutions,
+	}
+
+	if len(result) > 0 {
+		summary.TotalServices = result[0].TotalServices
+		summary.TotalUp = result[0].TotalUp
+		summary.TotalDown = result[0].TotalDown
+	}
+
+	return summary, nil
+}
+
 func (r *MongoRepository) UpdateInstitutionPing(ctx context.Context, id string, hwInfo *models.HardwareInfo, t time.Time) error {
 	objID, _ := parseObjectID(id)
 	coll := r.db.Collection("institutions")

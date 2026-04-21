@@ -181,6 +181,7 @@ func main() {
 	institutionsGroup := r.Group("/api/v1/institutions", middleware.JWTAuth(cfg.JWTSecret))
 	{
 		institutionsGroup.GET("", frontendHandler.ListInstitutions)
+		institutionsGroup.GET("/summary", frontendHandler.GetDashboardSummary)
 		institutionsGroup.POST("", frontendHandler.CreateInstitution)
 		institutionsGroup.GET("/:id/services", frontendHandler.ListServices)
 		institutionsGroup.POST("/:id/services/:name/restart", frontendHandler.RestartService)

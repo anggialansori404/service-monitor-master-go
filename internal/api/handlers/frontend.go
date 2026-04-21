@@ -136,6 +136,18 @@ func (h *FrontendHandler) ListInstitutions(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// GetDashboardSummary handles GET /institutions/summary.
+// Returns an aggregated summary of institutions and services.
+func (h *FrontendHandler) GetDashboardSummary(c *gin.Context) {
+	summary, err := h.Repo.GetDashboardSummary(c.Request.Context())
+	if err != nil {
+		log.Printf("ERROR GET DASHBOARD SUMMARY: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch dashboard summary"})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
 // ListServices handles GET /institutions/:id/services.
 // Returns all services for the given institution.
 func (h *FrontendHandler) ListServices(c *gin.Context) {

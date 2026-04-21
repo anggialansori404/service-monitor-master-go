@@ -18,6 +18,7 @@ type Repository interface {
 	GetInstitutionByID(id string) (*models.Institution, error)
 	GetInstitutionByName(name string) (*models.Institution, error)
 	GetAllInstitutions() ([]models.Institution, error)
+	GetDashboardSummary(ctx context.Context) (*models.DashboardSummaryResponse, error)
 	UpdateInstitutionPing(ctx context.Context, id string, hwInfo *models.HardwareInfo, t time.Time) error
 	CountInstitutions() (int64, error)
 	CreateInstitution(inst *models.Institution) error
