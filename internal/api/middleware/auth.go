@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // AgentAuth validates the X-Agent-ID and X-Secret-Key headers against the
@@ -27,10 +28,10 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 			return
 		}
 
-		institution, err := repo.GetInstitutionByAgentIDAndSecret(c.Request.Context(), agentID, secretKey)
+		institution, err := repo.GetInstitutionByAgentID(c.Request.Context(), agentID)
 		if err != nil {
 			if err == repository.ErrNotFound {
-				log.Printf("MONGODB AUTH FAILED: Agent not found or secret mismatched (AgentID: %s)", agentID)
+				log.Printf("MONGODB AUTH FAILED: Agent not found (AgentID: %s)", agentID)
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 					"error": "invalid agent credentials",
 				})
@@ -49,6 +50,18 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 			log.Printf("MONGODB ERROR IN MIDDLEWARE (FindOne): %v", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 				"error": "database error in auth middleware",
+			})
+			return
+		}
+
+		// Strict Bcrypt Verification - Reverted to secure mode
+		storedSecret := institution.SecretKey
+		trimmedSecret := strings.TrimSpace(secretKey)
+
+		if err := bcrypt.CompareHashAndPassword([]byte(storedSecret), []byte(trimmedSecret)); err != nil {
+			log.Printf("MONGODB AUTH FAILED: secret mismatched (strict mode) for AgentID: %s", agentID)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid agent credentials",
 			})
 			return
 		}

@@ -28,6 +28,7 @@ type Repository interface {
 	GetServicesByInstitution(instID string, search string, page, limit int) ([]models.Service, int64, error)
 	GetService(instID string, name string) (*models.Service, error)
 	UpsertService(ctx context.Context, service *models.Service) error
+	BulkUpsertServices(ctx context.Context, services []models.Service) error
 	UpdateServiceStatus(ctx context.Context, instID string, name, status string, t time.Time) error
 	CountServicesByStatus(instID string, status string) (int64, error)
 	CreateService(service *models.Service) error

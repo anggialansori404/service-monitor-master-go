@@ -21,11 +21,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// FrontendHandler holds dependencies for frontend-facing endpoints.
 type FrontendHandler struct {
-	Repo      repository.Repository
-	Registry  *ws.Registry
-	JWTSecret string
+	Repo        repository.Repository
+	Registry    *ws.Registry
+	JWTSecret   string
 }
 
 // NewFrontendHandler creates a new FrontendHandler.
@@ -117,7 +116,24 @@ func (h *FrontendHandler) ListInstitutions(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, institutions)
+	var stats []institutionStats
+	for _, inst := range institutions {
+		up, _ := h.Repo.CountServicesByStatus(inst.ID, "UP")
+		down, _ := h.Repo.CountServicesByStatus(inst.ID, "DOWN")
+
+		connected := false
+		if inst.LastPing != nil && time.Since(*inst.LastPing) < 5*time.Minute {
+			connected = true
+		}
+
+		stats = append(stats, institutionStats{
+			Institution: inst,
+			UpCount:     up,
+			DownCount:   down,
+			Connected:   connected,
+		})
+	}
+	c.JSON(http.StatusOK, stats)
 }
 
 // ListServices handles GET /institutions/:id/services.
@@ -157,6 +173,8 @@ func (h *FrontendHandler) ListServices(c *gin.Context) {
 	}
 
 	search := c.Query("search")
+
+	// Direct DB Integration (Redis Removed) - Created by Kang Anggi
 	services, total, err := h.Repo.GetServicesByInstitution(institutionID, search, page, limit)
 
 	if err != nil {

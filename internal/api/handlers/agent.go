@@ -4,23 +4,24 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
+	"monitoring-master/internal/alert"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
-	"monitoring-master/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
 
-// AgentHandler holds dependencies for agent-facing endpoints.
 type AgentHandler struct {
-	Repo repository.Repository
+	Repo        repository.Repository
+	AlertMgr    *alert.Manager
 }
 
 // NewAgentHandler creates a new AgentHandler.
-func NewAgentHandler(repo repository.Repository) *AgentHandler {
-	return &AgentHandler{Repo: repo}
+func NewAgentHandler(repo repository.Repository, alertMgr *alert.Manager) *AgentHandler {
+	return &AgentHandler{Repo: repo, AlertMgr: alertMgr}
 }
 
 // syncRequest is the expected payload for POST /agent/sync.
@@ -40,6 +41,7 @@ type syncService struct {
 // It creates or updates service records for the authenticated institution
 // and bumps the institution's LastPing timestamp.
 func (h *AgentHandler) Sync(c *gin.Context) {
+	// Direct DB Integration (Redis Removed) - Created by Kang Anggi
 	institutionID, _ := c.Get("InstitutionID")
 	instID := institutionID.(string)
 
@@ -48,12 +50,29 @@ func (h *AgentHandler) Sync(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	agentID := c.GetHeader("X-Agent-ID")
+	if agentID == "" {
+		agentID = "unknown_agent"
+	}
+	log.Printf("[SYNC] Received payload from AgentID: %s | Total Services: %d", agentID, len(req.Services))
+
 	now := time.Now().Local()
 
+	// Optimized Bulk Upsert - Created by Kang Anggi
+	oldServicesList, _, _ := h.Repo.GetServicesByInstitution(instID, "", 1, 5000)
+	oldStatusMap := make(map[string]string)
+	for _, old := range oldServicesList {
+		oldStatusMap[old.Name] = old.Status
+	}
+
+	var servicesToUpsert []models.Service
+	var statusChanges []models.Service
+
 	for _, svc := range req.Services {
-		statusToSave := svc.Status
+		statusToSave := strings.ToUpper(strings.TrimSpace(svc.Status))
 		if statusToSave == "" || statusToSave == "UNKNOWN" {
-			statusToSave = "UP" // Default fallback
+			statusToSave = "UP"
 		}
 
 		service := models.Service{
@@ -64,60 +83,39 @@ func (h *AgentHandler) Sync(c *gin.Context) {
 			AutoRestart:   svc.AutoRestart,
 			LastChecked:   &now,
 		}
+		servicesToUpsert = append(servicesToUpsert, service)
 
-		// Fetch old status to compare
-		oldService, err := h.Repo.GetService(instID, svc.Name)
-		oldStatus := ""
-		if err == nil {
-			oldStatus = oldService.Status
-		}
-
-		if err := h.Repo.UpsertService(c.Request.Context(), &service); err != nil {
-			log.Printf("MONGODB UPSERT ERROR in Sync: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to sync services"})
-			return
-		}
-
-		// Create audit log entry if status changed.
+		oldStatus := oldStatusMap[svc.Name]
 		if oldStatus != statusToSave && oldStatus != "" && oldStatus != "UNKNOWN" {
-			// Trigger Telegram Alert on status change
-			inst, err := h.Repo.GetInstitutionByID(instID)
-			if err == nil {
-				msg := fmt.Sprintf("⚠️ *SERVICE DOWN*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s\n\n_Agent sedang mencoba auto-restart (jika diaktifkan)._",
-					inst.Name, svc.Name, time.Now().Format("02 Jan 2006 15:04:05"))
-				if statusToSave == "UP" {
-					msg = fmt.Sprintf("✅ *SERVICE RECOVERY*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s",
-						inst.Name, svc.Name, time.Now().Format("02 Jan 2006 15:04:05"))
-				}
-				if setting, err := h.Repo.GetSettings(c.Request.Context()); err == nil && setting.EnableTelegramAlerts {
-					services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msg)
-				}
-			}
-
-			auditLog := models.AuditLog{
-				InstitutionID: instID,
-				ServiceName:   svc.Name,
-				Action:        "STATE_CHANGE",
-				Status:        statusToSave,
-				TriggeredBy:   "SYSTEM",
-				Details:       fmt.Sprintf("Service reported as %s by Agent", statusToSave),
-				Timestamp:     now,
-				CreatedAt:     now,
-			}
-			if err := h.Repo.CreateAuditLog(c.Request.Context(), &auditLog); err != nil {
-				log.Printf("MONGODB INSERT ERROR (CreateAuditLog) in Sync: %v", err)
-			}
+			statusChanges = append(statusChanges, service)
 		}
 	}
 
-	// Update institution's last_ping and hardware info.
+	if err := h.Repo.BulkUpsertServices(c.Request.Context(), servicesToUpsert); err != nil {
+		log.Printf("MONGODB BULK UPSERT ERROR in Sync (Agent HTTP): %v", err)
+	}
+
+	for _, svc := range statusChanges {
+		h.AlertMgr.AddEvent(instID, svc.Name, svc.Status, fmt.Sprintf("Reported via Sync at %v", now.Format(time.RFC3339)))
+
+		auditLog := models.AuditLog{
+			InstitutionID: instID,
+			ServiceName:   svc.Name,
+			Action:        "STATE_CHANGE",
+			Status:        svc.Status,
+			TriggeredBy:   "SYSTEM",
+			Details:       fmt.Sprintf("Service reported as %s by Agent", svc.Status),
+			Timestamp:     now,
+			CreatedAt:     now,
+		}
+		_ = h.Repo.CreateAuditLog(c.Request.Context(), &auditLog)
+	}
+
 	if err := h.Repo.UpdateInstitutionPing(c.Request.Context(), instID, req.HardwareInfo, now); err != nil {
 		log.Printf("UPDATE ERROR (UpdateInstitutionPing) in Sync: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to sync services"})
-		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "synced", "count": len(req.Services)})
+	c.JSON(http.StatusOK, gin.H{"status": "sync processed", "count": len(req.Services)})
 }
 
 // alertRequest is the expected payload for POST /agent/alert.
@@ -159,19 +157,8 @@ func (h *AgentHandler) Alert(c *gin.Context) {
 
 	// Create audit log entry if status changed.
 	if oldStatus != req.Status && oldStatus != "" {
-		// Trigger Telegram Alert on status change
-		inst, err := h.Repo.GetInstitutionByID(instID)
-		if err == nil {
-			msg := fmt.Sprintf("⚠️ *SERVICE DOWN*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s\n\n_Agent sedang mencoba auto-restart (jika diaktifkan)._",
-				inst.Name, req.Service, time.Now().Format("02 Jan 2006 15:04:05"))
-			if req.Status == "UP" {
-				msg = fmt.Sprintf("✅ *SERVICE RECOVERY*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s",
-					inst.Name, req.Service, time.Now().Format("02 Jan 2006 15:04:05"))
-			}
-			if setting, err := h.Repo.GetSettings(c.Request.Context()); err == nil && setting.EnableTelegramAlerts {
-				services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msg)
-			}
-		}
+		// Redirect via AlertManager (Phase 4)
+		h.AlertMgr.AddEvent(instID, req.Service, req.Status, "Fallback trigger via HTTP Alert")
 
 		auditLog := models.AuditLog{
 			InstitutionID: instID,

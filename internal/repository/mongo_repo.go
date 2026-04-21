@@ -414,6 +414,48 @@ func (r *MongoRepository) UpsertService(ctx context.Context, service *models.Ser
 	return err
 }
 
+func (r *MongoRepository) BulkUpsertServices(ctx context.Context, services []models.Service) error {
+	if len(services) == 0 {
+		return nil
+	}
+
+	coll := r.db.Collection("services")
+	var modelsList []mongo.WriteModel
+
+	for _, svc := range services {
+		filter := bson.M{"institution_id": svc.InstitutionID, "name": svc.Name}
+
+		statusStr := svc.Status
+		if statusStr == "" {
+			statusStr = "UP"
+		}
+
+		svcID := svc.ID
+		if svcID == "" {
+			svcID = bson.NewObjectID().Hex()
+		}
+
+		update := bson.M{
+			"$set": bson.M{
+				"type":         svc.Type,
+				"status":       statusStr,
+				"auto_restart": svc.AutoRestart,
+				"last_checked": svc.LastChecked,
+			},
+			"$setOnInsert": bson.M{
+				"_id": svcID,
+			},
+		}
+
+		model := mongo.NewUpdateOneModel().SetFilter(filter).SetUpdate(update).SetUpsert(true)
+		modelsList = append(modelsList, model)
+	}
+
+	opts := options.BulkWrite().SetOrdered(false)
+	_, err := coll.BulkWrite(ctx, modelsList, opts)
+	return err
+}
+
 func (r *MongoRepository) UpdateServiceStatus(ctx context.Context, instID string, name, status string, t time.Time) error {
 	coll := r.db.Collection("services")
 	filter := bson.M{"institution_id": instID, "name": name}

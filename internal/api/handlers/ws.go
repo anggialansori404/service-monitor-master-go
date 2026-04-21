@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 	"monitoring-master/internal/services"
 	"monitoring-master/internal/ws"
+	"monitoring-master/internal/alert"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -25,13 +27,14 @@ var upgrader = websocket.Upgrader{
 
 // WSHandler holds dependencies for WebSocket endpoints.
 type WSHandler struct {
-	Registry *ws.Registry
-	Repo     repository.Repository
+	Registry    *ws.Registry
+	Repo        repository.Repository
+	AlertMgr    *alert.Manager
 }
 
 // NewWSHandler creates a new WSHandler.
-func NewWSHandler(registry *ws.Registry, repo repository.Repository) *WSHandler {
-	return &WSHandler{Registry: registry, Repo: repo}
+func NewWSHandler(registry *ws.Registry, repo repository.Repository, alertMgr *alert.Manager) *WSHandler {
+	return &WSHandler{Registry: registry, Repo: repo, AlertMgr: alertMgr}
 }
 
 // wsResponse is used to detect response messages from agents.
@@ -52,6 +55,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	}
 	institution := institutionVal.(*models.Institution)
 	agentID := institution.AgentID
+	instID := institution.ID
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -89,8 +93,6 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			continue
 		}
 
-		log.Printf("DEBUG WS MSG from agent %s: %+v", agentID, msgData)
-
 		// Try to extract request_id (handle both snake_case forms just in case)
 		var reqID string
 		if id, ok := msgData["request_id"].(string); ok && id != "" {
@@ -102,6 +104,98 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 		var action string
 		if act, ok := msgData["action"].(string); ok {
 			action = act
+		}
+
+		if action != "sync" {
+			log.Printf("DEBUG WS MSG from agent %s: %+v", agentID, msgData)
+		}
+
+		// Phase 3 & 4: Seamless WS Streaming for Sync and Alert
+		if action == "sync" {
+			// Direct DB Integration (Redis Removed) - Created by Kang Anggi
+			var req struct {
+				HardwareInfo *models.HardwareInfo `json:"hardware_info"`
+				Services     []struct {
+					Name        string `json:"name"`
+					Type        string `json:"type"`
+					Status      string `json:"status"`
+					AutoRestart bool   `json:"auto_restart"`
+				} `json:"services"`
+			}
+			if err := json.Unmarshal(rawMsg, &req); err != nil {
+				log.Printf("WS sync unmarshal error for agent %s: %v", agentID, err)
+				continue
+			}
+
+			log.Printf("[SYNC] Received payload from AgentID: %s | Total Services: %d", agentID, len(req.Services))
+
+			now := time.Now().Local()
+			
+			// Optimized Bulk Upsert - Created by Kang Anggi
+			oldServicesList, _, _ := h.Repo.GetServicesByInstitution(instID, "", 1, 5000)
+			oldStatusMap := make(map[string]string)
+			for _, old := range oldServicesList {
+				oldStatusMap[old.Name] = old.Status
+			}
+
+			var servicesToUpsert []models.Service
+			var statusChanges []models.Service
+
+			for _, svc := range req.Services {
+				statusToSave := strings.ToUpper(strings.TrimSpace(svc.Status))
+				if statusToSave == "" || statusToSave == "UNKNOWN" {
+					statusToSave = "UP"
+				}
+
+				service := models.Service{
+					InstitutionID: instID,
+					Name:          svc.Name,
+					Type:          svc.Type,
+					Status:        statusToSave,
+					AutoRestart:   svc.AutoRestart,
+					LastChecked:   &now,
+				}
+				servicesToUpsert = append(servicesToUpsert, service)
+
+				oldStatus := oldStatusMap[svc.Name]
+				if oldStatus != statusToSave && oldStatus != "" && oldStatus != "UNKNOWN" {
+					statusChanges = append(statusChanges, service)
+				}
+			}
+
+			if err := h.Repo.BulkUpsertServices(context.Background(), servicesToUpsert); err != nil {
+				log.Printf("MONGODB BULK UPSERT ERROR in Sync (Agent WS): %v", err)
+			}
+
+			for _, svc := range statusChanges {
+				h.AlertMgr.AddEvent(instID, svc.Name, svc.Status, fmt.Sprintf("Reported via WS Sync at %v", now.Format(time.RFC3339)))
+
+				auditLog := models.AuditLog{
+					InstitutionID: instID,
+					ServiceName:   svc.Name,
+					Action:        "STATE_CHANGE",
+					Status:        svc.Status,
+					TriggeredBy:   "SYSTEM",
+					Details:       fmt.Sprintf("Service reported as %s by Agent", svc.Status),
+					Timestamp:     now,
+					CreatedAt:     now,
+				}
+				_ = h.Repo.CreateAuditLog(context.Background(), &auditLog)
+			}
+
+			if err := h.Repo.UpdateInstitutionPing(context.Background(), instID, req.HardwareInfo, now); err != nil {
+				log.Printf("UPDATE ERROR (UpdateInstitutionPing) in WS Sync: %v", err)
+			}
+			continue
+		}
+
+		if action == "alert" {
+			svcName, _ := msgData["service"].(string)
+			status, _ := msgData["status"].(string)
+			msgStr, _ := msgData["message"].(string)
+
+			h.AlertMgr.AddEvent(instID, svcName, status, msgStr)
+			continue
 		}
 
 		if reqID != "" {

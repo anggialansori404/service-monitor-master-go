@@ -202,6 +202,46 @@ func (r *SQLRepository) UpsertService(ctx context.Context, service *models.Servi
 	}).Error
 }
 
+func (r *SQLRepository) BulkUpsertServices(ctx context.Context, services []models.Service) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, svc := range services {
+			var existing models.Service
+			err := tx.Where("institution_id = ? AND name = ?", svc.InstitutionID, svc.Name).First(&existing).Error
+
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if svc.Status == "" {
+					svc.Status = "UP"
+				}
+				if svc.ID == "" {
+					svc.ID = generateID()
+				}
+				if err := tx.Create(&svc).Error; err != nil {
+					return err
+				}
+				continue
+			} else if err != nil {
+				return err
+			}
+
+			statusStr := svc.Status
+			if statusStr == "" {
+				statusStr = "UP"
+			}
+
+			err = tx.Model(&existing).Updates(map[string]interface{}{
+				"type":         svc.Type,
+				"status":       statusStr,
+				"auto_restart": svc.AutoRestart,
+				"last_checked": svc.LastChecked,
+			}).Error
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (r *SQLRepository) UpdateServiceStatus(ctx context.Context, instID string, name, status string, t time.Time) error {
 	result := r.db.WithContext(ctx).Model(&models.Service{}).Where("institution_id = ? AND name = ?", instID, name).Updates(map[string]interface{}{
 		"status":       status,

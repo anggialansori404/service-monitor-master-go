@@ -14,6 +14,7 @@ import (
 	"monitoring-master/internal/database"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
+	"monitoring-master/internal/alert"
 	"monitoring-master/internal/ws"
 
 	"github.com/gin-contrib/cors"
@@ -145,10 +146,14 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// Start Alert Engine (Debounce & Batching)
+	alertManager := alert.NewManager(repo, 2*time.Minute)
+	go alertManager.Start(context.Background())
+
 	// --- Handlers ---
-	agentHandler := handlers.NewAgentHandler(repo)
+	agentHandler := handlers.NewAgentHandler(repo, alertManager)
 	frontendHandler := handlers.NewFrontendHandler(repo, registry, cfg.JWTSecret)
-	wsHandler := handlers.NewWSHandler(registry, repo)
+	wsHandler := handlers.NewWSHandler(registry, repo, alertManager)
 	settingHandler := handlers.NewSettingHandler(repo)
 
 	// --- Routes ---
