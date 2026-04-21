@@ -132,7 +132,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			now := time.Now().Local()
 			
 			// Optimized Bulk Upsert - Created by Kang Anggi
-			oldServicesList, _, _ := h.Repo.GetServicesByInstitution(instID, "", 1, 5000)
+			oldServicesList, _, _ := h.Repo.GetServicesByInstitution(instID, "", "", 1, 5000)
 			oldStatusMap := make(map[string]string)
 			for _, old := range oldServicesList {
 				oldStatusMap[old.Name] = old.Status

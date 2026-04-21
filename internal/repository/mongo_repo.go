@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"monitoring-master/internal/models"
@@ -319,7 +320,7 @@ func (r *MongoRepository) DeleteInstitution(id string) error {
 
 // --- Service ---
 
-func (r *MongoRepository) GetServicesByInstitution(instID string, search string, page, limit int) ([]models.Service, int64, error) {
+func (r *MongoRepository) GetServicesByInstitution(instID string, search string, status string, page, limit int) ([]models.Service, int64, error) {
 	coll := r.db.Collection("services")
 	objID, _ := parseObjectID(instID)
 	filter := bson.M{"institution_id": bson.M{"$in": []interface{}{instID, objID}}}
@@ -327,6 +328,12 @@ func (r *MongoRepository) GetServicesByInstitution(instID string, search string,
 	if search != "" {
 		filter["name"] = bson.M{"$regex": search, "$options": "i"}
 	}
+
+	// Inject Status Filter - Created by Kang Anggi
+	if status != "" && strings.ToUpper(status) != "ALL" {
+		filter["status"] = strings.ToUpper(status)
+	}
+
 	total, err := coll.CountDocuments(context.TODO(), filter)
 	if err != nil {
 		return nil, 0, err

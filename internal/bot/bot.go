@@ -100,7 +100,7 @@ func (mb *MonitoringBot) handleStatus(c tele.Context) error {
 		return c.Send("❌ Database error while looking up institution.")
 	}
 
-	services, _, err := mb.Repo.GetServicesByInstitution(institution.ID, "", 1, 100)
+	services, _, err := mb.Repo.GetServicesByInstitution(institution.ID, "", "", 1, 100)
 
 	if err != nil {
 		return c.Send("❌ Failed to fetch services.")

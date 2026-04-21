@@ -185,9 +185,10 @@ func (h *FrontendHandler) ListServices(c *gin.Context) {
 	}
 
 	search := c.Query("search")
+	status := c.Query("status")
 
 	// Direct DB Integration (Redis Removed) - Created by Kang Anggi
-	services, total, err := h.Repo.GetServicesByInstitution(institutionID, search, page, limit)
+	services, total, err := h.Repo.GetServicesByInstitution(institutionID, search, status, page, limit)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch services"})

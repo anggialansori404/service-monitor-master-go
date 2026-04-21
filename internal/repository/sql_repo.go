@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"monitoring-master/internal/models"
@@ -158,7 +159,7 @@ func (r *SQLRepository) DeleteInstitution(id string) error {
 
 // --- Service ---
 
-func (r *SQLRepository) GetServicesByInstitution(instID string, search string, page, limit int) ([]models.Service, int64, error) {
+func (r *SQLRepository) GetServicesByInstitution(instID string, search string, status string, page, limit int) ([]models.Service, int64, error) {
 	var services []models.Service
 	var total int64
 
@@ -167,6 +168,12 @@ func (r *SQLRepository) GetServicesByInstitution(instID string, search string, p
 	if search != "" {
 		query = query.Where("name LIKE ?", "%"+search+"%")
 	}
+
+	// Inject Status Filter - Created by Kang Anggi
+	if status != "" && strings.ToUpper(status) != "ALL" {
+		query = query.Where("status = ?", strings.ToUpper(status))
+	}
+
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err

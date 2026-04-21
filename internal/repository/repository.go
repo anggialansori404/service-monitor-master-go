@@ -26,7 +26,7 @@ type Repository interface {
 	DeleteInstitution(id string) error
 
 	// Service
-	GetServicesByInstitution(instID string, search string, page, limit int) ([]models.Service, int64, error)
+	GetServicesByInstitution(instID string, search string, status string, page, limit int) ([]models.Service, int64, error)
 	GetService(instID string, name string) (*models.Service, error)
 	UpsertService(ctx context.Context, service *models.Service) error
 	BulkUpsertServices(ctx context.Context, services []models.Service) error
