@@ -193,6 +193,7 @@ func main() {
 		institutionsGroup.POST("", frontendHandler.CreateInstitution)
 		institutionsGroup.GET("/:id/services", frontendHandler.ListServices)
 		institutionsGroup.POST("/:id/services/:name/restart", frontendHandler.RestartService)
+		institutionsGroup.PATCH("/:id/services/:name", frontendHandler.UpdateServiceAutoRestart)
 		institutionsGroup.GET("/:id", frontendHandler.GetInstitution)
 		institutionsGroup.PUT("/:id", frontendHandler.UpdateInstitution)
 		institutionsGroup.DELETE("/:id", frontendHandler.DeleteInstitution)

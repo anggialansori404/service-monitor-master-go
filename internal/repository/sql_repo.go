@@ -282,6 +282,19 @@ func (r *SQLRepository) UpdateServiceStatus(ctx context.Context, instID string, 
 	return nil
 }
 
+func (r *SQLRepository) UpdateServiceAutoRestart(ctx context.Context, instID, name string, autoRestart bool) error {
+	result := r.db.WithContext(ctx).Model(&models.Service{}).
+		Where("institution_id = ? AND name = ?", instID, name).
+		Update("auto_restart", autoRestart)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *SQLRepository) UpdateServiceRestartStatus(ctx context.Context, instID, name, restartStatus string) error {
 	return r.db.WithContext(ctx).Model(&models.Service{}).
 		Where("institution_id = ? AND name = ?", instID, name).
@@ -387,6 +400,9 @@ func (r *SQLRepository) GetAuditLogs(ctx context.Context, filter map[string]inte
 		}
 		if status, ok := filter["status"].(string); ok {
 			query = query.Where("status = ?", status)
+		}
+		if institutionID, ok := filter["institution_id"].(string); ok {
+			query = query.Where("institution_id = ?", institutionID)
 		}
 	}
 

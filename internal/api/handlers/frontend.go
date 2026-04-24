@@ -341,6 +341,32 @@ func (h *FrontendHandler) RestartService(c *gin.Context) {
 	}
 }
 
+// UpdateServiceAutoRestart handles PATCH /institutions/:id/services/:name.
+// Updates the auto_restart field for a service.
+func (h *FrontendHandler) UpdateServiceAutoRestart(c *gin.Context) {
+	instID := c.Param("id")
+	serviceName := c.Param("name")
+	
+	var req struct {
+		AutoRestart bool `json:"auto_restart" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	if err := h.Repo.UpdateServiceAutoRestart(c.Request.Context(), instID, serviceName, req.AutoRestart); err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "service not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update service"})
+		return
+	}
+	
+	c.JSON(http.StatusOK, gin.H{"message": "auto_restart updated", "auto_restart": req.AutoRestart})
+}
+
 // generateRandomString returns a cryptographically random string of length n.
 func generateRandomString(n int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -611,6 +637,9 @@ func (h *FrontendHandler) GetAuditLogs(c *gin.Context) {
 	}
 	if status := c.Query("status"); status != "" {
 		filter["status"] = status
+	}
+	if institutionID := c.Query("institution_id"); institutionID != "" {
+		filter["institution_id"] = institutionID
 	}
 
 	logs, total, err := h.Repo.GetAuditLogs(c.Request.Context(), filter, page, limit)
