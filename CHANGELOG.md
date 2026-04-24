@@ -1,0 +1,189 @@
+# Changelog — Service Monitoring
+
+> Dokumen ini mencatat semua perubahan yang telah dilakukan pada project.
+> Baca dokumen ini sebelum menambah fitur atau melakukan perubahan besar.
+
+---
+
+## [2026-04-24] — Session: Bug Fixes, UX Improvements, Config
+
+---
+
+### service-monitor-agent-go
+
+#### fix(monitor): WS alert handler tidak menyimpan status ke DB
+- **File**: `internal/monitor/monitor.go`
+- **Problem**: Auto-restart hanya dipicu saat status BERUBAH (UP?DOWN). Jika service sudah DOWN dari awal atau tetap DOWN setelah restart gagal, auto-restart tidak pernah dipanggil lagi.
+- **Fix**: Pisahkan logika auto-restart dari blok `if prevStatus != status`. Tambah `restartingServices map[string]bool` sebagai concurrent guard agar tidak spawn goroutine restart berulang setiap check interval.
+- **Behavior baru**: Auto-restart dipicu setiap cycle DOWN. Jika restart sedang berjalan, cycle berikutnya skip dengan log `"Auto-restart already in progress"`. Setelah selesai, bisa trigger lagi.
+
+#### fix(monitor): Auto-restart memblokir monitoring cycle
+- **File**: `internal/monitor/monitor.go`
+- **Problem**: Auto-restart berjalan synchronous di dalam goroutine worker yang sama dengan `wg.Done()`, menyebabkan `time.Sleep(10s)` memblokir seluruh monitoring cycle.
+- **Fix**: Pindahkan auto-restart ke goroutine terpisah dengan context-aware sleep (`select { case <-time.After(10s): ... case <-ctx.Done(): ... }`).
+
+---
+
+### service-monitor-master-go
+
+#### fix(ws): WS alert action tidak menyimpan status service ke DB
+- **File**: `internal/api/handlers/ws.go`
+- **Problem**: Handler `action == "alert"` hanya memanggil `AlertMgr.AddEvent()` tanpa memanggil `h.Repo.UpdateServiceStatus()`. Status DOWN tidak tersimpan ke DB, frontend tidak pernah tahu service down.
+- **Fix**: Tambah pemanggilan `h.Repo.UpdateServiceStatus()` setelah `AlertMgr.AddEvent()` di WS alert handler.
+
+#### fix(models): Tambah field RestartStatus ke Service model
+- **Files**: `internal/models/models.go`, `internal/repository/repository.go`, `internal/repository/mongo_repo.go`, `internal/repository/sql_repo.go`
+- **Change**: Tambah field `RestartStatus string` ke struct `Service` dengan tag `json:"restart_status"`. Tambah method `UpdateServiceRestartStatus` ke interface dan kedua implementasi repo.
+- **Value contract**: `"restarting"` saat restart dimulai, `""` saat normal.
+
+#### fix(timezone): Semua timestamp konsisten WIB (Asia/Jakarta)
+- **Files**: `cmd/server/main.go`, `internal/alert/manager.go`, `internal/bot/bot.go`, `internal/api/middleware/security.go`, `internal/repository/sql_repo.go`, `internal/repository/mongo_repo.go`
+- **Problem**: Sebagian timestamp pakai `time.Now()` (UTC), sebagian `time.Now().Local()`. Log yang dibuat jam 00:30 WIB tersimpan dengan tanggal kemarin di UTC.
+- **Fix**: Set `time.Local = Asia/Jakarta` di awal `main()`. Ganti semua `time.Now()` ? `time.Now().Local()` di 5 file.
+- **Note untuk Docker/Alpine**: Pastikan image punya `tzdata` (`apk add --no-cache tzdata`), atau `time.LoadLocation("Asia/Jakarta")` akan gagal.
+
+#### feat(master): PATCH endpoint untuk toggle auto_restart service
+- **Files**: `internal/repository/repository.go`, `internal/repository/mongo_repo.go`, `internal/repository/sql_repo.go`, `internal/api/handlers/frontend.go`, `cmd/server/main.go`
+- **New endpoint**: `PATCH /api/v1/institutions/:id/services/:name`
+- **Payload**: `{ "auto_restart": true/false }`
+- **Response**: `{ "message": "auto_restart updated", "auto_restart": true/false }`
+- **New method**: `UpdateServiceAutoRestart(ctx, instID, name, autoRestart)` di interface + kedua repo.
+
+#### feat(master): Filter institution_id di endpoint audit logs
+- **Files**: `internal/api/handlers/frontend.go`, `internal/repository/sql_repo.go`
+- **Change**: Tambah query param `institution_id` di `GET /api/v1/audit-logs`. Mongo repo otomatis bekerja (filter langsung ke `$match`). SQL repo perlu case baru di filter handler.
+- **Usage**: `GET /api/v1/audit-logs?institution_id={id}&page=1&limit=10`
+
+---
+
+### monitoring-service-hub (frontend)
+
+#### fix(frontend): Hapus Node Security card yang berisi data palsu
+- **File**: `src/app/(protected)/institutions/[id]/page.tsx`
+- **Problem**: Card "Node Security" menampilkan `~14ms` latency dan `99.9%` uptime yang hardcoded — bukan data real.
+- **Fix**: Hapus card sepenuhnya. Card "Node Hardware Analytics" tetap ada.
+
+#### fix(frontend): Hapus kolom Category yang selalu "System"
+- **File**: `src/app/(protected)/institutions/[id]/page.tsx`
+- **Problem**: Kolom Category di services table selalu menampilkan "System" (hardcoded), tidak informatif.
+- **Fix**: Hapus `<TableHead>` dan `<TableCell>` untuk kolom Category.
+
+#### fix(frontend): Tambah konfirmasi dialog sebelum restart service
+- **File**: `src/app/(protected)/institutions/[id]/page.tsx`
+- **Change**: Restart button sekarang membuka `AlertDialog` konfirmasi terlebih dahulu. User harus klik "Restart" di dialog untuk melanjutkan. Klik "Batal" membatalkan aksi.
+- **State baru**: `confirmRestart: string | null` — menyimpan nama service yang akan di-restart.
+
+#### fix(frontend): Ganti live clock 1s interval dengan last-updated timestamp
+- **File**: `src/app/(protected)/dashboard/page.tsx`
+- **Problem**: `setInterval(..., 1000)` untuk live clock menyebabkan re-render setiap detik.
+- **Fix**: Hapus interval, ganti dengan `formatDistanceToNow(summaryQuery.dataUpdatedAt)` — menampilkan "Updated X ago".
+
+#### feat(frontend): Metric cards Total Institutions & Online Nodes bisa di-klik
+- **File**: `src/app/(protected)/dashboard/page.tsx`
+- **Change**: Bungkus dua metric card dengan `<Link href="/institutions">`. Card "Total Services" dan "Offline Alerts" tidak diberi link (tidak ada halaman tujuan yang relevan).
+
+#### fix(frontend): Warna status pakai CSS token, bukan hardcoded
+- **Files**: `src/app/globals.css`, `src/app/(protected)/institutions/[id]/page.tsx`, `src/app/(protected)/institutions/page.tsx`, `src/app/(protected)/dashboard/page.tsx`
+- **Change**: Tambah CSS custom properties di `globals.css`:
+  - `--status-up` (emerald)
+  - `--status-down` (red-orange, sama dengan `--destructive`)
+  - `--status-recovering` (amber)
+  - `--status-offline` (slate)
+  - Masing-masing punya nilai light dan dark mode.
+- **Usage**: `text-[color:var(--status-up)]`, `bg-[color:var(--status-up)]/20`
+
+#### fix(frontend): Hapus Header.tsx legacy (tidak dipakai)
+- **File**: `src/components/layout/Header.tsx` — **DIHAPUS**
+- **Note**: Header sekarang inline di `src/app/(protected)/layout.tsx`. File `Header.tsx` tidak diimport di mana pun.
+
+#### feat(frontend): Toggle auto_restart via Switch UI di services table
+- **File**: `src/app/(protected)/institutions/[id]/page.tsx`
+- **Change**: Badge "Autonomous" diganti dengan `<Switch>` yang bisa di-toggle. Toggle memanggil `PATCH /api/v1/institutions/:id/services/:name` dengan payload `{ auto_restart: true/false }`.
+- **Disabled**: Switch di-disable saat agent offline.
+
+#### feat(frontend): Halaman /audit-logs tersendiri
+- **Files**: `src/app/(protected)/audit-logs/page.tsx` (baru), `src/app/(protected)/settings/page.tsx`, `src/app/(protected)/layout.tsx`
+- **Change**: Audit logs dipindahkan dari Settings tab ke halaman tersendiri `/audit-logs`.
+- **Fitur baru**:
+  - Filter per institusi (dropdown)
+  - Export CSV (current page data)
+  - Filter action, status, date range (sama seperti sebelumnya)
+- **Settings tab**: Diganti dengan link ke `/audit-logs`.
+- **Sidebar**: Tambah nav item "Audit Logs" dengan icon `ActivitySquare`.
+
+#### fix(frontend): Session expired dialog, tidak auto-logout
+- **File**: `src/components/providers/SessionProvider.tsx`
+- **Problem**: Ketika session timeout habis, `handleLogout()` langsung dipanggil — `removeToken()` + redirect ke `/login` tanpa interaksi user.
+- **Fix**: Pisahkan `handleExpired()` dari `handleLogout()`. Saat timeout habis, tampilkan dialog "Session Expired" yang menunggu user klik "Login Again". Tidak ada auto-redirect.
+- **Behavior baru**:
+  - Menit ke-(timeout-2): Dialog warning muncul ? "Stay Logged In" atau "Logout Now"
+  - Menit ke-timeout: Dialog "Session Expired" muncul ? user harus klik "Login Again"
+  - Dialog expired tidak bisa di-dismiss dengan klik di luar
+- **State baru**: `isExpiredOpen: boolean`
+
+#### docs: Tambah .env.example
+- **File**: `.env.example` (baru)
+- **Isi**: Dokumentasi semua env vars yang dipakai beserta keterangan dan default value.
+- **Env vars**:
+  - `NEXT_PUBLIC_API_URL` — URL backend API (wajib)
+  - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` — Cloudflare Turnstile site key (wajib)
+  - `NEXT_PUBLIC_SESSION_TIMEOUT` — Durasi session timeout dalam menit (default: 30)
+  - `NEXT_PUBLIC_TIMEZONE` — Timezone display (default: Asia/Jakarta)
+- **Note**: Untuk Vercel, set via Dashboard ? Settings ? Environment Variables.
+
+---
+
+## Arsitektur & Catatan Penting
+
+### Dual Database Support
+Master mendukung dua database driver: **MongoDB** dan **SQL (PostgreSQL/MySQL)**. Setiap perubahan model atau query **wajib** diimplementasikan di kedua file:
+- `internal/repository/mongo_repo.go`
+- `internal/repository/sql_repo.go`
+
+Dan didaftarkan di interface:
+- `internal/repository/repository.go`
+
+### WebSocket Flow (Agent ? Master)
+```
+Agent ? Master (WS):
+  action: "sync"    ? BulkUpsertServices + UpdateInstitutionPing
+  action: "alert"   ? UpdateServiceStatus + AlertMgr.AddEvent
+
+Master ? Agent (WS):
+  action: "restart" ? Agent eksekusi restart command, kirim balik restart_result
+
+Agent ? Master (WS):
+  action: "restart_result" ? Diteruskan ke pending request channel (frontend menunggu)
+```
+
+### Auto-Restart Flow (Agent)
+```
+checkAll() setiap CheckIntervalSeconds detik:
+  1. checkService() ? status UP/DOWN
+  2. Jika status berubah ? kirim alert ke master
+  3. Jika DOWN + auto_restart + tidak sedang restart:
+     ? spawn goroutine restart (non-blocking)
+     ? set restartingServices[name] = true
+     ? sleep 10s (context-aware)
+     ? eksekusi RestartCommand
+     ? delete restartingServices[name]
+```
+
+### Frontend Auth Flow
+```
+Login ? JWT token ? disimpan di localStorage (Zustand persist)
+Protected routes ? cek token di useEffect ? redirect /login jika tidak ada
+Session timeout ? warning dialog (2 menit sebelum) ? expired dialog (saat habis)
+Expired dialog ? user klik "Login Again" ? removeToken() + redirect /login
+```
+
+### Env Vars Master (service-monitor-master-go)
+Lihat `service-monitor-master-go/.env.example` untuk daftar lengkap. Variabel wajib:
+- `BOT_TOKEN` — Telegram bot token
+- `JWT_SECRET` — Secret untuk signing JWT
+- `DB_DRIVER` — `mongo`, `postgres`, atau `mysql`
+
+### Env Vars Frontend (monitoring-service-hub)
+Lihat `monitoring-service-hub/.env.example` untuk daftar lengkap. Variabel wajib:
+- `NEXT_PUBLIC_API_URL` — URL backend API
+- `NEXT_PUBLIC_TURNSTILE_SITE_KEY` — Cloudflare Turnstile site key
