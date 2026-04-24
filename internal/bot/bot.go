@@ -163,7 +163,7 @@ func (mb *MonitoringBot) handleRestart(c tele.Context) error {
 		InstitutionID: institution.ID,
 		ServiceName:   serviceName,
 		Action:        "RESTART_TRIGGERED",
-		Timestamp:     time.Now(),
+		Timestamp:     time.Now().Local(),
 	}
 	if err := mb.Repo.CreateAuditLog(context.TODO(), &auditLog); err != nil {
 		return c.Send(fmt.Sprintf(

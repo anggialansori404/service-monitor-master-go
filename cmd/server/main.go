@@ -29,6 +29,14 @@ import (
 )
 
 func main() {
+	// Set timezone to Asia/Jakarta for consistent timestamp handling
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		log.Fatalf("Failed to load timezone Asia/Jakarta: %v", err)
+	}
+	time.Local = loc
+	log.Println("Timezone set to Asia/Jakarta")
+
 	// --- Configuration ---
 	cfg := config.LoadConfig()
 

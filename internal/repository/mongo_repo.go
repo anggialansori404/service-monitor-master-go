@@ -357,6 +357,7 @@ func (r *MongoRepository) GetServicesByInstitution(instID string, search string,
 		Type          string      `bson:"type"`
 		Status        string      `bson:"status"`
 		AutoRestart   bool        `bson:"auto_restart"`
+		RestartStatus string      `bson:"restart_status,omitempty"`
 		LastChecked   *time.Time  `bson:"last_checked,omitempty"`
 	}
 	if err := cursor.All(context.TODO(), &docs); err != nil {
@@ -386,6 +387,7 @@ func (r *MongoRepository) GetServicesByInstitution(instID string, search string,
 			Type:          doc.Type,
 			Status:        doc.Status,
 			AutoRestart:   doc.AutoRestart,
+			RestartStatus: doc.RestartStatus,
 			LastChecked:   doc.LastChecked,
 		})
 	}
@@ -407,6 +409,7 @@ func (r *MongoRepository) GetService(instID string, name string) (*models.Servic
 		Type          string      `bson:"type"`
 		Status        string      `bson:"status"`
 		AutoRestart   bool        `bson:"auto_restart"`
+		RestartStatus string      `bson:"restart_status,omitempty"`
 		LastChecked   *time.Time  `bson:"last_checked,omitempty"`
 	}
 	err := coll.FindOne(context.TODO(), bson.M{"institution_id": instID, "name": name}).Decode(&doc)
@@ -429,6 +432,7 @@ func (r *MongoRepository) GetService(instID string, name string) (*models.Servic
 		Type:          doc.Type,
 		Status:        doc.Status,
 		AutoRestart:   doc.AutoRestart,
+		RestartStatus: doc.RestartStatus,
 		LastChecked:   doc.LastChecked,
 	}
 	return &service, nil
@@ -528,6 +532,14 @@ func (r *MongoRepository) UpdateServiceStatus(ctx context.Context, instID string
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *MongoRepository) UpdateServiceRestartStatus(ctx context.Context, instID, name, restartStatus string) error {
+	coll := r.db.Collection("services")
+	filter := bson.M{"institution_id": instID, "name": name}
+	update := bson.M{"$set": bson.M{"restart_status": restartStatus}}
+	_, err := coll.UpdateOne(ctx, filter, update)
+	return err
 }
 
 func (r *MongoRepository) CountServicesByStatus(instID string, status string) (int64, error) {
@@ -828,7 +840,7 @@ func (r *MongoRepository) BlacklistIP(ctx context.Context, ip string, reason str
 		ID:        bson.NewObjectID().Hex(),
 		IP:        ip,
 		Reason:    reason,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().Local(),
 	}
 	_, err := coll.InsertOne(ctx, blacklisted)
 	return err

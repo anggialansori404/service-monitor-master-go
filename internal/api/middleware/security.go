@@ -172,13 +172,13 @@ func SuspiciousPathLogger(repo repository.Repository) gin.HandlerFunc {
 				}
 			}(ip, reason)
 
-			securityLog := &models.SecurityLog{
-				IP:        ip,
-				Path:      c.Request.URL.Path,
-				Method:    c.Request.Method,
-				UserAgent: c.Request.UserAgent(),
-				Timestamp: time.Now(),
-			}
+		securityLog := &models.SecurityLog{
+			IP:        ip,
+			Path:      c.Request.URL.Path,
+			Method:    c.Request.Method,
+			UserAgent: c.Request.UserAgent(),
+			Timestamp: time.Now().Local(),
+		}
 			go func(l *models.SecurityLog) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()

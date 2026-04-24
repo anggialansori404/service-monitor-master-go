@@ -282,6 +282,12 @@ func (r *SQLRepository) UpdateServiceStatus(ctx context.Context, instID string, 
 	return nil
 }
 
+func (r *SQLRepository) UpdateServiceRestartStatus(ctx context.Context, instID, name, restartStatus string) error {
+	return r.db.WithContext(ctx).Model(&models.Service{}).
+		Where("institution_id = ? AND name = ?", instID, name).
+		Update("restart_status", restartStatus).Error
+}
+
 func (r *SQLRepository) CountServicesByStatus(instID string, status string) (int64, error) {
 	var count int64
 	err := r.db.Model(&models.Service{}).Where("institution_id = ? AND status = ?", instID, status).Count(&count).Error
@@ -432,7 +438,7 @@ func (r *SQLRepository) UpdateSettings(ctx context.Context, setting *models.Glob
 		if setting.ID == "" {
 			setting.ID = generateID()
 		}
-		setting.UpdatedAt = time.Now()
+		setting.UpdatedAt = time.Now().Local()
 		return r.db.WithContext(ctx).Create(setting).Error
 	} else if err != nil {
 		return err
@@ -441,7 +447,7 @@ func (r *SQLRepository) UpdateSettings(ctx context.Context, setting *models.Glob
 	existing.TelegramBotToken = setting.TelegramBotToken
 	existing.TelegramChatID = setting.TelegramChatID
 	existing.EnableTelegramAlerts = setting.EnableTelegramAlerts
-	existing.UpdatedAt = time.Now()
+	existing.UpdatedAt = time.Now().Local()
 
 	return r.db.WithContext(ctx).Save(&existing).Error
 }
@@ -453,7 +459,7 @@ func (r *SQLRepository) BlacklistIP(ctx context.Context, ip string, reason strin
 		ID:        generateID(),
 		IP:        ip,
 		Reason:    reason,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().Local(),
 	}
 	return r.db.WithContext(ctx).Create(&blacklisted).Error
 }

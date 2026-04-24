@@ -195,6 +195,15 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			msgStr, _ := msgData["message"].(string)
 
 			h.AlertMgr.AddEvent(instID, svcName, status, msgStr)
+
+			// Update service status in DB
+			now := time.Now().Local()
+			statusUpper := strings.ToUpper(strings.TrimSpace(status))
+			if statusUpper != "" {
+				if err := h.Repo.UpdateServiceStatus(context.Background(), instID, svcName, statusUpper, now); err != nil {
+					log.Printf("WS Alert: failed to update service status for %s/%s: %v", instID, svcName, err)
+				}
+			}
 			continue
 		}
 

@@ -68,7 +68,7 @@ func (m *Manager) AddEvent(instID, serviceName, status, message string) {
 		ServiceName:   serviceName,
 		Status:        status,
 		Message:       message,
-		Timestamp:     time.Now(),
+		Timestamp:     time.Now().Local(),
 	}
 }
 
@@ -160,7 +160,7 @@ func (m *Manager) sendBatchedAlert(ctx context.Context, instID string, events []
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("🔴 *CRITICAL ALERT BATCH*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n", inst.Name, time.Now().Format("02 Jan 2006 15:04:05")))
+	sb.WriteString(fmt.Sprintf("🔴 *CRITICAL ALERT BATCH*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n", inst.Name, time.Now().Local().Format("02 Jan 2006 15:04:05")))
 	sb.WriteString("_Daftar Service Terkena Dampak (DOWN):_\n")
 	
 	for i, ev := range events {
@@ -181,12 +181,12 @@ func (m *Manager) sendDirectAlert(ctx context.Context, event AlertEvent) {
 	}
 
 	msg := fmt.Sprintf("✅ *SERVICE RECOVERY*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s",
-		inst.Name, event.ServiceName, time.Now().Format("02 Jan 2006 15:04:05"))
+		inst.Name, event.ServiceName, time.Now().Local().Format("02 Jan 2006 15:04:05"))
 
 	if event.Status == "DOWN" {
         // Fallback for direct down (unused in current batched logic, but here just in case)
 		msg = fmt.Sprintf("⚠️ *SERVICE DOWN*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s\n\n_Agent sedang mencoba auto-restart._",
-			inst.Name, event.ServiceName, time.Now().Format("02 Jan 2006 15:04:05"))
+			inst.Name, event.ServiceName, time.Now().Local().Format("02 Jan 2006 15:04:05"))
 	}
 
 	setting, err := m.repo.GetSettings(ctx)

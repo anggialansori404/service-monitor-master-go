@@ -32,6 +32,7 @@ type Service struct {
 	Type          string     `json:"type" bson:"type"`
 	Status        string     `json:"status" bson:"status"`
 	AutoRestart   bool       `json:"auto_restart" bson:"auto_restart"`
+	RestartStatus string     `json:"restart_status" bson:"restart_status,omitempty" gorm:"default:''"`
 	LastChecked   *time.Time `json:"last_checked" bson:"last_checked,omitempty"`
 
 	Institution *Institution `json:"-" bson:"-" gorm:"foreignKey:InstitutionID"`
