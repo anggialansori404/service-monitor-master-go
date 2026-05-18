@@ -80,13 +80,16 @@ func (m *Manager) handleEvent(ctx context.Context, event AlertEvent) {
 
 	switch event.Status {
 	case "DOWN":
+		// If a timer already exists, we do NOT reset it. This ensures that repeated DOWN
+		// events (like auto-restart logs) don't delay the notification forever.
+		if _, ok := m.debounceMap[key]; ok {
+			// Just update the pending message if needed, but keep the original timer running
+			m.pendingDowns[key] = event
+			return
+		}
+
 		// Store it in pending and start a timer
 		m.pendingDowns[key] = event
-
-		// If a timer already exists, we cancel it and reset (flapping case where it goes DOWN immediately again)
-		if t, ok := m.debounceMap[key]; ok {
-			t.Stop()
-		}
 
 		// Create a new timer
 		// Note: The timer runs in a separate goroutine. It must re-acquire lock when processTimeout fires.

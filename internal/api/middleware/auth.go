@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"log"
 	"net/http"
 	"strings"
@@ -54,12 +55,25 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 			return
 		}
 
-		// Strict Bcrypt Verification - Reverted to secure mode
-		storedSecret := institution.SecretKey
+		// Support both plaintext matching and legacy bcrypt matching
+		storedSecret := strings.TrimSpace(institution.SecretKey)
 		trimmedSecret := strings.TrimSpace(secretKey)
 
-		if err := bcrypt.CompareHashAndPassword([]byte(storedSecret), []byte(trimmedSecret)); err != nil {
-			log.Printf("MONGODB AUTH FAILED: secret mismatched (strict mode) for AgentID: %s", agentID)
+		// 1. Try exact string match (ConstantTimeCompare)
+		matched := false
+		if len(storedSecret) == len(trimmedSecret) && subtle.ConstantTimeCompare([]byte(storedSecret), []byte(trimmedSecret)) == 1 {
+			matched = true
+		}
+
+		// 2. If not exact match, try bcrypt (in case DB stores a bcrypt hash)
+		if !matched {
+			if err := bcrypt.CompareHashAndPassword([]byte(storedSecret), []byte(trimmedSecret)); err == nil {
+				matched = true
+			}
+		}
+
+		if !matched {
+			log.Printf("MONGODB AUTH FAILED: secret mismatched for AgentID: %s", agentID)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid agent credentials",
 			})
