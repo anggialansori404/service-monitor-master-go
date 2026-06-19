@@ -488,3 +488,95 @@ func (r *SQLRepository) IsIPBlacklisted(ctx context.Context, ip string) (bool, e
 	}
 	return count > 0, nil
 }
+
+// --- Schedule ---
+
+// ScheduleRepo returns the ScheduleRepository interface implemented by SQLRepository.
+func (r *SQLRepository) ScheduleRepo() ScheduleRepository {
+	return r
+}
+
+func (r *SQLRepository) CreateSchedule(ctx context.Context, schedule *models.Schedule) error {
+	return r.db.WithContext(ctx).Create(schedule).Error
+}
+
+func (r *SQLRepository) GetSchedule(ctx context.Context, id string) (*models.Schedule, error) {
+	var schedule models.Schedule
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&schedule).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &schedule, nil
+}
+
+func (r *SQLRepository) ListSchedules(ctx context.Context, institutionID string, enabledOnly bool) ([]models.Schedule, error) {
+	query := r.db.WithContext(ctx).Model(&models.Schedule{})
+
+	if institutionID != "" {
+		query = query.Where("institution_id = ?", institutionID)
+	}
+	if enabledOnly {
+		query = query.Where("enabled = ?", true)
+	}
+
+	var schedules []models.Schedule
+	if err := query.Order("created_at DESC").Find(&schedules).Error; err != nil {
+		return nil, err
+	}
+	if schedules == nil {
+		schedules = []models.Schedule{}
+	}
+	return schedules, nil
+}
+
+func (r *SQLRepository) UpdateSchedule(ctx context.Context, schedule *models.Schedule) error {
+	return r.db.WithContext(ctx).Save(schedule).Error
+}
+
+func (r *SQLRepository) DeleteSchedule(ctx context.Context, id string) error {
+	return r.db.WithContext(ctx).Delete(&models.Schedule{}, "id = ?", id).Error
+}
+
+func (r *SQLRepository) CreateScheduleRun(ctx context.Context, run *models.ScheduleRun) error {
+	return r.db.WithContext(ctx).Create(run).Error
+}
+
+func (r *SQLRepository) ListScheduleRuns(ctx context.Context, scheduleID string, page, limit int) ([]models.ScheduleRun, int64, error) {
+	query := r.db.WithContext(ctx).Model(&models.ScheduleRun{}).Where("schedule_id = ?", scheduleID)
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * limit
+	var runs []models.ScheduleRun
+	if err := query.Order("run_at DESC").Offset(offset).Limit(limit).Find(&runs).Error; err != nil {
+		return nil, 0, err
+	}
+	if runs == nil {
+		runs = []models.ScheduleRun{}
+	}
+	return runs, total, nil
+}
+
+func (r *SQLRepository) GetEnabledSchedules(ctx context.Context) ([]models.Schedule, error) {
+	var schedules []models.Schedule
+	if err := r.db.WithContext(ctx).Where("enabled = ?", true).Find(&schedules).Error; err != nil {
+		return nil, err
+	}
+	if schedules == nil {
+		schedules = []models.Schedule{}
+	}
+	return schedules, nil
+}
+
+func (r *SQLRepository) UpdateScheduleRunTimes(ctx context.Context, scheduleID string, lastRunAt, nextRunAt time.Time) error {
+	return r.db.WithContext(ctx).Model(&models.Schedule{}).Where("id = ?", scheduleID).Updates(map[string]interface{}{
+		"last_run_at": lastRunAt,
+		"next_run_at": nextRunAt,
+	}).Error
+}
