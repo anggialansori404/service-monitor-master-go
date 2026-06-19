@@ -72,6 +72,25 @@ func main() {
 		log.Println("Successfully connected to MongoDB Atlas!")
 		mongoDB = client.Database("monitoring_service")
 		repo = repository.NewMongoRepository(mongoDB)
+
+		// Create MongoDB indexes for schedules and schedule_runs
+		schedulesColl := mongoDB.Collection("schedules")
+		_, err = schedulesColl.Indexes().CreateMany(ctx, []mongo.IndexModel{
+			{Keys: bson.D{{Key: "institution_id", Value: 1}}},
+			{Keys: bson.D{{Key: "enabled", Value: 1}}},
+		})
+		if err != nil {
+			log.Printf("WARNING: failed to create schedules indexes: %v", err)
+		}
+
+		runsColl := mongoDB.Collection("schedule_runs")
+		_, err = runsColl.Indexes().CreateMany(ctx, []mongo.IndexModel{
+			{Keys: bson.D{{Key: "schedule_id", Value: 1}}},
+			{Keys: bson.D{{Key: "run_at", Value: -1}}},
+		})
+		if err != nil {
+			log.Printf("WARNING: failed to create schedule_runs indexes: %v", err)
+		}
 	} else {
 		log.Printf("Connecting to SQL Database (%s)...", cfg.DBDriver)
 
@@ -101,6 +120,8 @@ func main() {
 			&models.GlobalSetting{},
 			&models.SecurityLog{},
 			&models.BlacklistedIP{},
+			&models.Schedule{},
+			&models.ScheduleRun{},
 		)
 		if err != nil {
 			log.Fatalf("failed to auto-migrate database: %v", err)
