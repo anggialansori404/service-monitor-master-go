@@ -243,7 +243,7 @@ func (s *ServiceScheduler) executeSchedule(schedule *models.Schedule) {
 		ScheduleID:    schedule.ID,
 		ScheduleName:  schedule.Name,
 		InstitutionID: schedule.InstitutionID,
-		TriggeredBy:   "SCHEDULED",
+		TriggeredBy:   "SCHEDULER",
 		ServiceNames:  schedule.ServiceNames,
 		Status:        status,
 		ResultMessage: resultMsg,
