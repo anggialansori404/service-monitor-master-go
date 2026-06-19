@@ -11,6 +11,19 @@ import (
 // ErrNotFound is returned when a queried record does not exist.
 var ErrNotFound = errors.New("record not found")
 
+// ScheduleRepository abstracts schedule and schedule-run database operations.
+type ScheduleRepository interface {
+	CreateSchedule(ctx context.Context, schedule *models.Schedule) error
+	GetSchedule(ctx context.Context, id string) (*models.Schedule, error)
+	ListSchedules(ctx context.Context, institutionID string, enabledOnly bool) ([]models.Schedule, error)
+	UpdateSchedule(ctx context.Context, schedule *models.Schedule) error
+	DeleteSchedule(ctx context.Context, id string) error
+	CreateScheduleRun(ctx context.Context, run *models.ScheduleRun) error
+	ListScheduleRuns(ctx context.Context, scheduleID string, page, limit int) ([]models.ScheduleRun, int64, error)
+	GetEnabledSchedules(ctx context.Context) ([]models.Schedule, error)
+	UpdateScheduleRunTimes(ctx context.Context, scheduleID string, lastRunAt, nextRunAt time.Time) error
+}
+
 // Repository abstracts all database operations used by handlers, bot, middleware, and seeder.
 type Repository interface {
 	// Institution
@@ -57,4 +70,7 @@ type Repository interface {
 	// Blacklist
 	BlacklistIP(ctx context.Context, ip string, reason string) error
 	IsIPBlacklisted(ctx context.Context, ip string) (bool, error)
+
+	// Schedule
+	ScheduleRepo() ScheduleRepository
 }
