@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"time"
 
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
+	"monitoring-master/internal/ws"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -16,7 +19,7 @@ import (
 // ScheduleHandler handles CRUD operations for schedules.
 type ScheduleHandler struct {
 	Repo      repository.Repository
-	Registry  interface{} // placeholder, typed later (ws.Registry)
+	Registry  *ws.Registry
 	Scheduler interface{} // placeholder, typed later (gocron scheduler)
 }
 
@@ -311,4 +314,230 @@ func (h *ScheduleHandler) DeleteSchedule(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// EnableSchedule handles POST /schedules/:id/enable.
+// Sets Enabled=true and returns the updated schedule.
+func (h *ScheduleHandler) EnableSchedule(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "schedule id is required"})
+		return
+	}
+
+	schedule, err := h.Repo.ScheduleRepo().GetSchedule(c.Request.Context(), id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "schedule not found"})
+			return
+		}
+		log.Printf("EnableSchedule fetch error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
+	schedule.Enabled = true
+	schedule.UpdatedAt = time.Now()
+
+	if err := h.Repo.ScheduleRepo().UpdateSchedule(c.Request.Context(), schedule); err != nil {
+		log.Printf("EnableSchedule save error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update schedule"})
+		return
+	}
+
+	c.JSON(http.StatusOK, schedule)
+}
+
+// DisableSchedule handles POST /schedules/:id/disable.
+// Sets Enabled=false and returns the updated schedule.
+func (h *ScheduleHandler) DisableSchedule(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "schedule id is required"})
+		return
+	}
+
+	schedule, err := h.Repo.ScheduleRepo().GetSchedule(c.Request.Context(), id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "schedule not found"})
+			return
+		}
+		log.Printf("DisableSchedule fetch error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
+	schedule.Enabled = false
+	schedule.UpdatedAt = time.Now()
+
+	if err := h.Repo.ScheduleRepo().UpdateSchedule(c.Request.Context(), schedule); err != nil {
+		log.Printf("DisableSchedule save error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update schedule"})
+		return
+	}
+
+	c.JSON(http.StatusOK, schedule)
+}
+
+// TriggerSchedule handles POST /schedules/:id/trigger.
+// Sends restart commands to the agent for all services in the schedule
+// and records a ScheduleRun with manual trigger.
+func (h *ScheduleHandler) TriggerSchedule(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "schedule id is required"})
+		return
+	}
+
+	schedule, err := h.Repo.ScheduleRepo().GetSchedule(c.Request.Context(), id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "schedule not found"})
+			return
+		}
+		log.Printf("TriggerSchedule fetch error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
+	institution, err := h.Repo.GetInstitutionByID(schedule.InstitutionID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "institution not found"})
+			return
+		}
+		log.Printf("TriggerSchedule institution fetch error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
+	results := make([]gin.H, 0, len(schedule.ServiceNames))
+	successCount := 0
+	failCount := 0
+
+	for _, serviceName := range schedule.ServiceNames {
+		result := gin.H{"service": serviceName, "status": "FAILED", "message": ""}
+
+		reqID := fmt.Sprintf("sched-manual-%d", time.Now().UnixNano())
+
+		respChan := make(chan ws.WsResponse)
+		h.Registry.PendingRequests.Store(reqID, respChan)
+		defer h.Registry.PendingRequests.Delete(reqID)
+
+		payload := map[string]interface{}{
+			"request_id": reqID,
+			"action":     "restart",
+			"service":    serviceName,
+		}
+
+		err := h.Registry.SendToAgent(institution.AgentID, payload)
+		if err != nil {
+			result["message"] = "agent offline: " + err.Error()
+			failCount++
+			results = append(results, result)
+			continue
+		}
+
+		select {
+		case resp := <-respChan:
+			success, ok := resp["success"].(bool)
+			if ok && success {
+				result["status"] = "SUCCESS"
+				successCount++
+			} else {
+				failCount++
+			}
+			if msg, ok := resp["message"].(string); ok {
+				result["message"] = msg
+			}
+		case <-time.After(10 * time.Second):
+			result["message"] = "timeout waiting for agent response"
+			failCount++
+		}
+
+		results = append(results, result)
+	}
+
+	// Determine overall status.
+	status := "SUCCESS"
+	if failCount > 0 && successCount == 0 {
+		status = "FAILED"
+	} else if failCount > 0 {
+		status = "PARTIAL"
+	}
+
+	// Build result message.
+	resultMsg := fmt.Sprintf("restarted %d/%d services (%d failed)", successCount, len(schedule.ServiceNames), failCount)
+
+	now := time.Now()
+	run := models.ScheduleRun{
+		ID:            uuid.New().String(),
+		ScheduleID:    schedule.ID,
+		ScheduleName:  schedule.Name,
+		InstitutionID: schedule.InstitutionID,
+		TriggeredBy:   "MANUAL",
+		ServiceNames:  schedule.ServiceNames,
+		Status:        status,
+		ResultMessage: resultMsg,
+		RunAt:         now,
+		CatchUp:       false,
+		CreatedAt:     now,
+	}
+
+	if err := h.Repo.ScheduleRepo().CreateScheduleRun(c.Request.Context(), &run); err != nil {
+		log.Printf("TriggerSchedule CreateScheduleRun error: %v", err)
+		// Don't fail the response — the restart already happened.
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"schedule_id":   schedule.ID,
+		"schedule_name": schedule.Name,
+		"triggered_by":  "MANUAL",
+		"status":        status,
+		"message":       resultMsg,
+		"results":       results,
+	})
+}
+
+// ListScheduleRuns handles GET /schedules/:id/runs.
+// Returns paginated run history for a schedule.
+func (h *ScheduleHandler) ListScheduleRuns(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "schedule id is required"})
+		return
+	}
+
+	page := 1
+	if p := c.Query("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+
+	limit := 20
+	if l := c.Query("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	runs, total, err := h.Repo.ScheduleRepo().ListScheduleRuns(c.Request.Context(), id, page, limit)
+	if err != nil {
+		log.Printf("ListScheduleRuns error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch schedule runs"})
+		return
+	}
+
+	if runs == nil {
+		runs = []models.ScheduleRun{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data":  runs,
+		"total": total,
+		"page":  page,
+		"limit": limit,
+	})
 }
