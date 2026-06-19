@@ -4,7 +4,10 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"reflect"
+	"syscall"
 	"time"
 
 	"monitoring-master/internal/api/handlers"
@@ -15,6 +18,7 @@ import (
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 	"monitoring-master/internal/alert"
+	"monitoring-master/internal/scheduler"
 	"monitoring-master/internal/ws"
 
 	"github.com/gin-contrib/cors"
@@ -179,11 +183,19 @@ func main() {
 	alertManager := alert.NewManager(repo, 2*time.Minute)
 	go alertManager.Start(context.Background())
 
+	// --- Scheduler ---
+	sched, err := scheduler.New(repo, registry)
+	if err != nil {
+		log.Fatalf("scheduler init: %v", err)
+	}
+
 	// --- Handlers ---
 	agentHandler := handlers.NewAgentHandler(repo, alertManager)
 	frontendHandler := handlers.NewFrontendHandler(repo, registry, cfg.JWTSecret)
 	wsHandler := handlers.NewWSHandler(registry, repo, alertManager)
 	settingHandler := handlers.NewSettingHandler(repo)
+	scheduleHandler := handlers.NewScheduleHandler(repo, sched)
+	scheduleHandler.Registry = registry
 
 	// --- Routes ---
 	// Agent endpoints (authenticated via X-Agent-ID / X-Secret-Key)
@@ -222,12 +234,46 @@ func main() {
 		institutionsGroup.GET("/:id/credentials", frontendHandler.GetInstitutionCredentials)
 	}
 
+	// Schedule endpoints (JWT-protected)
+	schedulesGroup := r.Group("/api/v1/schedules", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		schedulesGroup.POST("", scheduleHandler.CreateSchedule)
+		schedulesGroup.GET("", scheduleHandler.ListSchedules)
+		schedulesGroup.GET("/:id", scheduleHandler.GetSchedule)
+		schedulesGroup.PATCH("/:id", scheduleHandler.UpdateSchedule)
+		schedulesGroup.DELETE("/:id", scheduleHandler.DeleteSchedule)
+		schedulesGroup.POST("/:id/enable", scheduleHandler.EnableSchedule)
+		schedulesGroup.POST("/:id/disable", scheduleHandler.DisableSchedule)
+		schedulesGroup.POST("/:id/trigger", scheduleHandler.TriggerSchedule)
+		schedulesGroup.GET("/:id/runs", scheduleHandler.ListScheduleRuns)
+	}
+
 	// WebSocket endpoint (agent-authenticated)
 	r.GET("/api/v1/ws/agent", middleware.AgentAuth(repo), wsHandler.AgentWS)
 
+	// --- Start Scheduler ---
+	go sched.Start()
+
+	// --- Graceful Shutdown ---
+	defer sched.Stop()
+
 	// --- Start Server ---
-	log.Printf("Starting server on :%s", cfg.Port)
-	if err := r.Run(":" + cfg.Port); err != nil {
-		log.Fatalf("failed to start server: %v", err)
+	srv := &http.Server{Addr: ":" + cfg.Port, Handler: r}
+	go func() {
+		log.Printf("Starting server on :%s", cfg.Port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+	log.Println("Shutting down...")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Fatalf("server shutdown error: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
+	"monitoring-master/internal/scheduler"
 	"monitoring-master/internal/ws"
 
 	"github.com/gin-gonic/gin"
@@ -20,12 +21,12 @@ import (
 type ScheduleHandler struct {
 	Repo      repository.Repository
 	Registry  *ws.Registry
-	Scheduler interface{} // placeholder, typed later (gocron scheduler)
+	Scheduler *scheduler.ServiceScheduler
 }
 
 // NewScheduleHandler creates a new ScheduleHandler.
-func NewScheduleHandler(repo repository.Repository) *ScheduleHandler {
-	return &ScheduleHandler{Repo: repo}
+func NewScheduleHandler(repo repository.Repository, sched *scheduler.ServiceScheduler) *ScheduleHandler {
+	return &ScheduleHandler{Repo: repo, Scheduler: sched}
 }
 
 // cronRegex validates standard 5-field cron expressions.
@@ -345,6 +346,10 @@ func (h *ScheduleHandler) EnableSchedule(c *gin.Context) {
 		return
 	}
 
+	if err := h.Scheduler.AddSchedule(schedule); err != nil {
+		log.Printf("EnableSchedule scheduler add error: %v", err)
+	}
+
 	c.JSON(http.StatusOK, schedule)
 }
 
@@ -375,6 +380,10 @@ func (h *ScheduleHandler) DisableSchedule(c *gin.Context) {
 		log.Printf("DisableSchedule save error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update schedule"})
 		return
+	}
+
+	if err := h.Scheduler.RemoveSchedule(schedule.ID); err != nil {
+		log.Printf("DisableSchedule scheduler remove error: %v", err)
 	}
 
 	c.JSON(http.StatusOK, schedule)
