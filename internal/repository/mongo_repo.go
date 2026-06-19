@@ -894,7 +894,7 @@ func (r *MongoRepository) GetSchedule(ctx context.Context, id string) (*models.S
 	err := coll.FindOne(ctx, bson.M{"_id": id}).Decode(&schedule)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return nil, nil
+			return nil, ErrNotFound
 		}
 		return nil, err
 	}
