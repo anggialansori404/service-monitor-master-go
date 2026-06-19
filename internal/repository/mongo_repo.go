@@ -868,3 +868,137 @@ func (r *MongoRepository) IsIPBlacklisted(ctx context.Context, ip string) (bool,
 	}
 	return count > 0, nil
 }
+
+// --- Schedule ---
+
+// ScheduleRepo returns this repository as a ScheduleRepository.
+func (r *MongoRepository) ScheduleRepo() ScheduleRepository {
+	return r
+}
+
+func (r *MongoRepository) CreateSchedule(ctx context.Context, schedule *models.Schedule) error {
+	coll := r.db.Collection("schedules")
+	if schedule.ID == "" {
+		schedule.ID = bson.NewObjectID().Hex()
+	}
+	now := time.Now()
+	schedule.CreatedAt = now
+	schedule.UpdatedAt = now
+	_, err := coll.InsertOne(ctx, schedule)
+	return err
+}
+
+func (r *MongoRepository) GetSchedule(ctx context.Context, id string) (*models.Schedule, error) {
+	coll := r.db.Collection("schedules")
+	var schedule models.Schedule
+	err := coll.FindOne(ctx, bson.M{"_id": id}).Decode(&schedule)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &schedule, nil
+}
+
+func (r *MongoRepository) ListSchedules(ctx context.Context, institutionID string, enabledOnly bool) ([]models.Schedule, error) {
+	coll := r.db.Collection("schedules")
+	filter := bson.M{}
+	if institutionID != "" {
+		filter["institution_id"] = institutionID
+	}
+	if enabledOnly {
+		filter["enabled"] = true
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
+	cursor, err := coll.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var schedules []models.Schedule
+	if err := cursor.All(ctx, &schedules); err != nil {
+		return nil, err
+	}
+	if schedules == nil {
+		schedules = []models.Schedule{}
+	}
+	return schedules, nil
+}
+
+func (r *MongoRepository) UpdateSchedule(ctx context.Context, schedule *models.Schedule) error {
+	coll := r.db.Collection("schedules")
+	schedule.UpdatedAt = time.Now()
+	filter := bson.M{"_id": schedule.ID}
+	_, err := coll.ReplaceOne(ctx, filter, schedule)
+	return err
+}
+
+func (r *MongoRepository) DeleteSchedule(ctx context.Context, id string) error {
+	coll := r.db.Collection("schedules")
+	filter := bson.M{"_id": id}
+	_, err := coll.DeleteOne(ctx, filter)
+	return err
+}
+
+func (r *MongoRepository) CreateScheduleRun(ctx context.Context, run *models.ScheduleRun) error {
+	coll := r.db.Collection("schedule_runs")
+	if run.ID == "" {
+		run.ID = bson.NewObjectID().Hex()
+	}
+	run.CreatedAt = time.Now()
+	_, err := coll.InsertOne(ctx, run)
+	return err
+}
+
+func (r *MongoRepository) ListScheduleRuns(ctx context.Context, scheduleID string, page, limit int) ([]models.ScheduleRun, int64, error) {
+	coll := r.db.Collection("schedule_runs")
+	filter := bson.M{"schedule_id": scheduleID}
+	total, err := coll.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	opts := options.Find().
+		SetSort(bson.D{{Key: "run_at", Value: -1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+	cursor, err := coll.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+	var runs []models.ScheduleRun
+	if err := cursor.All(ctx, &runs); err != nil {
+		return nil, 0, err
+	}
+	if runs == nil {
+		runs = []models.ScheduleRun{}
+	}
+	return runs, total, nil
+}
+
+func (r *MongoRepository) GetEnabledSchedules(ctx context.Context) ([]models.Schedule, error) {
+	coll := r.db.Collection("schedules")
+	filter := bson.M{"enabled": true}
+	cursor, err := coll.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var schedules []models.Schedule
+	if err := cursor.All(ctx, &schedules); err != nil {
+		return nil, err
+	}
+	if schedules == nil {
+		schedules = []models.Schedule{}
+	}
+	return schedules, nil
+}
+
+func (r *MongoRepository) UpdateScheduleRunTimes(ctx context.Context, scheduleID string, lastRunAt, nextRunAt time.Time) error {
+	coll := r.db.Collection("schedules")
+	filter := bson.M{"_id": scheduleID}
+	update := bson.M{"$set": bson.M{"last_run_at": lastRunAt, "next_run_at": nextRunAt}}
+	_, err := coll.UpdateOne(ctx, filter, update)
+	return err
+}
