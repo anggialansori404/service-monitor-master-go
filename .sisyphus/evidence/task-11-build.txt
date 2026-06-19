@@ -1,0 +1,2 @@
+﻿Go build: Success
+Build exit code: 0

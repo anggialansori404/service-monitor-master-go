@@ -63,11 +63,11 @@ func (h *FrontendHandler) Login(c *gin.Context) {
 	// 1. Buat custom claims dengan tipe MapClaims
 	expiryStr := os.Getenv("JWT_EXPIRY_MINUTES")
 	if expiryStr == "" {
-		expiryStr = "15"
+		expiryStr = "1440" // 24 hours
 	}
 	duration, err := strconv.Atoi(expiryStr)
 	if err != nil {
-		duration = 15
+		duration = 1440
 	}
 
 	claims := jwt.MapClaims{

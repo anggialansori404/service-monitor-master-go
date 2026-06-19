@@ -148,6 +148,12 @@ func (h *ScheduleHandler) CreateSchedule(c *gin.Context) {
 		return
 	}
 
+	if schedule.Enabled {
+		if err := h.Scheduler.AddSchedule(&schedule); err != nil {
+			log.Printf("CreateSchedule scheduler add error: %v", err)
+		}
+	}
+
 	c.JSON(http.StatusCreated, schedule)
 }
 
@@ -291,6 +297,15 @@ func (h *ScheduleHandler) UpdateSchedule(c *gin.Context) {
 		return
 	}
 
+	if changed {
+		_ = h.Scheduler.RemoveSchedule(existing.ID)
+		if existing.Enabled {
+			if err := h.Scheduler.AddSchedule(existing); err != nil {
+				log.Printf("UpdateSchedule scheduler add error: %v", err)
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, existing)
 }
 
@@ -312,6 +327,10 @@ func (h *ScheduleHandler) DeleteSchedule(c *gin.Context) {
 		log.Printf("DeleteSchedule error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete schedule"})
 		return
+	}
+
+	if err := h.Scheduler.RemoveSchedule(id); err != nil {
+		log.Printf("DeleteSchedule scheduler remove error: %v", err)
 	}
 
 	c.Status(http.StatusNoContent)
