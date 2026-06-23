@@ -27,14 +27,20 @@ var upgrader = websocket.Upgrader{
 
 // WSHandler holds dependencies for WebSocket endpoints.
 type WSHandler struct {
-	Registry    *ws.Registry
-	Repo        repository.Repository
-	AlertMgr    *alert.Manager
+	Registry          *ws.Registry
+	Repo              repository.Repository
+	AlertMgr          *alert.Manager
+	disconnectMsgIDs  map[string]int // institutionID -> telegram message_id of last disconnect alert
 }
 
 // NewWSHandler creates a new WSHandler.
 func NewWSHandler(registry *ws.Registry, repo repository.Repository, alertMgr *alert.Manager) *WSHandler {
-	return &WSHandler{Registry: registry, Repo: repo, AlertMgr: alertMgr}
+	return &WSHandler{
+		Registry:         registry,
+		Repo:             repo,
+		AlertMgr:         alertMgr,
+		disconnectMsgIDs: make(map[string]int),
+	}
 }
 
 // wsResponse is used to detect response messages from agents.
@@ -67,16 +73,36 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	h.Registry.Register(client)
 	log.Printf("agent connected: %s (institution: %s)", agentID, institution.Name)
 
+	// On reconnect, edit the previous "disconnected" Telegram message to "recovered"
+	if msgID, ok := h.disconnectMsgIDs[instID]; ok && msgID != 0 {
+		if setting, err := h.Repo.GetSettings(context.Background()); err == nil && setting.EnableTelegramAlerts {
+			recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\\n\\nNode Agent kembali tersambung!\\n🏢 *Lembaga:* %s\\n⏰ *Waktu:* %s\\n\\n_Sistem kembali normal._",
+				institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
+			if err := services.EditTelegramMessage(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msgID, recoveryMsg); err != nil {
+				log.Printf("Failed to edit disconnect alert for %s (msgID %d): %v — sending new recovery message", institution.Name, msgID, err)
+				// Fallback: send a new message instead
+				_, _ = services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, recoveryMsg)
+			}
+		}
+		delete(h.disconnectMsgIDs, instID)
+	}
+
 	defer func() {
 		h.Registry.Unregister(agentID)
 		log.Printf("agent disconnected: %s (institution: %s)", agentID, institution.Name)
 
-		// TRIGGER TELEGRAM ALERT
-		alertMsg := fmt.Sprintf("🔴 *CRITICAL ALERT*\n\nNode Agent terputus (Offline)!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Mohon segera periksa server/VPS lembaga terkait._",
+		// TRIGGER TELEGRAM ALERT — track message_id for later edit
+		alertMsg := fmt.Sprintf("🔴 *CRITICAL ALERT*\\n\\nNode Agent terputus (Offline)!\\n🏢 *Lembaga:* %s\\n⏰ *Waktu:* %s\\n\\n_Mohon segera periksa server/VPS lembaga terkait._",
 			institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
 
 		if setting, err := h.Repo.GetSettings(context.Background()); err == nil && setting.EnableTelegramAlerts {
-			services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, alertMsg)
+			msgID, sendErr := services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, alertMsg)
+			if sendErr != nil {
+				log.Printf("Failed to send disconnect alert for %s: %v", institution.Name, sendErr)
+			} else if msgID != 0 {
+				h.disconnectMsgIDs[instID] = msgID
+				log.Printf("Saved disconnect message_id %d for institution %s", msgID, institution.Name)
+			}
 		}
 	}()
 
