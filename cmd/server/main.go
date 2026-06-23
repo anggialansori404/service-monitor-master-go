@@ -199,6 +199,7 @@ func main() {
 
 	// --- Health handler ---
 	healthHandler := handlers.NewHealthHandler(repo)
+	healthHandler.Registry = registry
 
 	// --- Routes ---
 	// Health endpoints (no auth required)
@@ -227,6 +228,8 @@ func main() {
 		// Global Settings
 		protectedGroup.GET("/settings", settingHandler.GetSettings)
 		protectedGroup.POST("/settings", settingHandler.UpdateSettings)
+		protectedGroup.POST("/settings/test-alert", settingHandler.TestAlert)
+		protectedGroup.GET("/security-logs", settingHandler.GetSecurityLogs)
 	}
 
 	institutionsGroup := r.Group("/api/v1/institutions", middleware.JWTAuth(cfg.JWTSecret))

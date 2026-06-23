@@ -67,6 +67,7 @@ type Repository interface {
 	UpdateUserPassword(ctx context.Context, id string, hash string) error
 	GetAuditLogs(ctx context.Context, filter map[string]interface{}, page, limit int) ([]models.AuditLog, int64, error)
 	GetAuditLogsAll(ctx context.Context, filter map[string]interface{}) ([]models.AuditLog, error)
+	GetSecurityLogs(ctx context.Context, page, limit int) ([]models.SecurityLog, int64, error)
 
 	// Settings
 	GetSettings(ctx context.Context) (*models.GlobalSetting, error)

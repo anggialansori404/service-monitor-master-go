@@ -996,6 +996,64 @@ func (r *MongoRepository) GetAuditLogsAll(ctx context.Context, filter map[string
 	return logs, nil
 }
 
+func (r *MongoRepository) GetSecurityLogs(ctx context.Context, page, limit int) ([]models.SecurityLog, int64, error) {
+	coll := r.db.Collection("security_logs")
+
+	total, err := coll.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	skip := (page - 1) * limit
+
+	pipeline := mongo.Pipeline{
+		{{Key: "$sort", Value: bson.D{{Key: "timestamp", Value: -1}}}},
+		{{Key: "$skip", Value: skip}},
+		{{Key: "$limit", Value: limit}},
+	}
+
+	cursor, err := coll.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var docs []struct {
+		ID        interface{} `bson:"_id"`
+		IP        string      `bson:"ip"`
+		Path      string      `bson:"path"`
+		Method    string      `bson:"method"`
+		UserAgent string      `bson:"user_agent"`
+		Timestamp time.Time   `bson:"timestamp"`
+	}
+	if err := cursor.All(ctx, &docs); err != nil {
+		return nil, 0, err
+	}
+
+	var logs []models.SecurityLog
+	for _, doc := range docs {
+		var docID string
+		if oid, ok := doc.ID.(bson.ObjectID); ok {
+			docID = oid.Hex()
+		} else if s, ok := doc.ID.(string); ok {
+			docID = s
+		}
+		logs = append(logs, models.SecurityLog{
+			ID:        docID,
+			IP:        doc.IP,
+			Path:      doc.Path,
+			Method:    doc.Method,
+			UserAgent: doc.UserAgent,
+			Timestamp: doc.Timestamp,
+		})
+	}
+
+	if logs == nil {
+		logs = []models.SecurityLog{}
+	}
+	return logs, total, nil
+}
+
 // --- Settings ---
 
 func (r *MongoRepository) GetSettings(ctx context.Context) (*models.GlobalSetting, error) {

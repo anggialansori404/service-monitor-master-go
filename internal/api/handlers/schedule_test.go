@@ -182,6 +182,9 @@ func (m *mockRepo) GetAuditLogs(_ context.Context, _ map[string]interface{}, _, 
 func (m *mockRepo) GetAuditLogsAll(_ context.Context, _ map[string]interface{}) ([]models.AuditLog, error) {
 	return nil, nil
 }
+func (m *mockRepo) GetSecurityLogs(_ context.Context, _, _ int) ([]models.SecurityLog, int64, error) {
+	return nil, 0, nil
+}
 func (m *mockRepo) GetSettings(_ context.Context) (*models.GlobalSetting, error)  { return nil, nil }
 func (m *mockRepo) UpdateSettings(_ context.Context, _ *models.GlobalSetting) error { return nil }
 func (m *mockRepo) BlacklistIP(_ context.Context, _ string, _ string) error       { return nil }

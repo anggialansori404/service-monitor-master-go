@@ -545,6 +545,25 @@ func (r *SQLRepository) GetAuditLogsAll(ctx context.Context, filter map[string]i
 	return logs, nil
 }
 
+func (r *SQLRepository) GetSecurityLogs(ctx context.Context, page, limit int) ([]models.SecurityLog, int64, error) {
+	var logs []models.SecurityLog
+	var total int64
+
+	if err := r.db.WithContext(ctx).Model(&models.SecurityLog{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * limit
+	if err := r.db.WithContext(ctx).Order("timestamp DESC").Offset(offset).Limit(limit).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if logs == nil {
+		logs = []models.SecurityLog{}
+	}
+	return logs, total, nil
+}
+
 // --- Settings ---
 
 func (r *SQLRepository) GetSettings(ctx context.Context) (*models.GlobalSetting, error) {
