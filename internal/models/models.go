@@ -50,7 +50,7 @@ type DashboardSummaryResponse struct {
 type AuditLog struct {
 	ID              string    `json:"id" bson:"_id,omitempty" gorm:"primaryKey"`
 	InstitutionID   string    `json:"institution_id" bson:"institution_id"`
-	InstitutionName string    `json:"institution_name,omitempty" bson:"institution_name,omitempty" gorm:"-"`
+	InstitutionName string    `json:"institution_name,omitempty" bson:"institution_name,omitempty"`
 	ServiceName     string    `json:"service_name" bson:"service_name"`
 	Action          string    `json:"action" bson:"action"`
 	Status          string    `json:"status" bson:"status"`

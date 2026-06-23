@@ -47,7 +47,10 @@ type Repository interface {
 	UpdateServiceRestartStatus(ctx context.Context, instID, name, restartStatus string) error
 	UpdateServiceAutoRestart(ctx context.Context, instID, name string, autoRestart bool) error
 	CountServicesByStatus(instID string, status string) (int64, error)
+	CountServicesByStatusBulk(instIDs []string) (map[string]map[string]int64, error)
 	CreateService(service *models.Service) error
+	DeleteService(ctx context.Context, instID, name string) error
+	Ping(ctx context.Context) error
 
 	// AuditLog
 	CreateAuditLog(ctx context.Context, log *models.AuditLog) error
@@ -63,6 +66,7 @@ type Repository interface {
 	GetUserByID(ctx context.Context, id string) (*models.User, error)
 	UpdateUserPassword(ctx context.Context, id string, hash string) error
 	GetAuditLogs(ctx context.Context, filter map[string]interface{}, page, limit int) ([]models.AuditLog, int64, error)
+	GetAuditLogsAll(ctx context.Context, filter map[string]interface{}) ([]models.AuditLog, error)
 
 	// Settings
 	GetSettings(ctx context.Context) (*models.GlobalSetting, error)

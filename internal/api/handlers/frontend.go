@@ -116,10 +116,25 @@ func (h *FrontendHandler) ListInstitutions(c *gin.Context) {
 		return
 	}
 
+	var instIDs []string
+	for _, inst := range institutions {
+		instIDs = append(instIDs, inst.ID)
+	}
+
+	countsMap, err := h.Repo.CountServicesByStatusBulk(instIDs)
+	if err != nil {
+		log.Printf("ERROR COUNT SERVICES BULK: %v", err)
+		countsMap = make(map[string]map[string]int64) // fallback to empty
+	}
+
 	var stats []institutionStats
 	for _, inst := range institutions {
-		up, _ := h.Repo.CountServicesByStatus(inst.ID, "UP")
-		down, _ := h.Repo.CountServicesByStatus(inst.ID, "DOWN")
+		counts := countsMap[inst.ID]
+		var up, down int64
+		if counts != nil {
+			up = counts["UP"]
+			down = counts["DOWN"] + counts["ERROR"]
+		}
 
 		connected := false
 		if inst.LastPing != nil && time.Since(*inst.LastPing) < 5*time.Minute {
@@ -254,28 +269,6 @@ func (h *FrontendHandler) RestartService(c *gin.Context) {
 		return
 	}
 
-	// 1. Generate ID Unik
-	reqID := fmt.Sprintf("req-%d", time.Now().UnixNano())
-
-	// 2. Buat Channel untuk menunggu balasan
-	responseChan := make(chan ws.WsResponse)
-	h.Registry.PendingRequests.Store(reqID, responseChan)
-	defer h.Registry.PendingRequests.Delete(reqID)
-
-	// 3. Susun Payload dengan map (agar JSON key-nya PASTI huruf kecil 'request_id')
-	payload := map[string]interface{}{
-		"request_id": reqID,
-		"action":     "restart",
-		"service":    serviceName, // dari parameter URL
-	}
-
-	// 4. Kirim ke WebSocket Agent
-	err = h.Registry.SendToAgent(institution.AgentID, payload)
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
-		return
-	}
-
 	// 1. Ambil titipan dari Middleware
 	userEmail := c.GetString("userEmail") // Sesuai dengan c.Set di Middleware
 
@@ -296,36 +289,8 @@ func (h *FrontendHandler) RestartService(c *gin.Context) {
 		userEmail = "Unknown Admin"
 	}
 
-	var agentResp ws.WsResponse
-	select {
-	case res := <-responseChan:
-		agentResp = res
-
-		statusVal := "FAILED"
-		success, ok := res["success"].(bool)
-		if ok && success {
-			statusVal = "SUCCESS"
-		}
-
-		detailsStr, _ := res["message"].(string)
-
-		auditLog := models.AuditLog{
-			InstitutionID: instID,
-			ServiceName:   serviceName,
-			Action:        "RESTART_COMMAND",
-			Status:        statusVal,
-			TriggeredBy:   userEmail,
-			Timestamp:     time.Now().Local(),
-			Details:       detailsStr,
-		}
-		if err := h.Repo.CreateAuditLog(c.Request.Context(), &auditLog); err != nil {
-			// Log failure but still return agent response.
-			agentResp["warning"] = "failed to record audit log"
-		}
-
-		c.JSON(http.StatusOK, agentResp)
-
-	case <-time.After(10 * time.Second):
+	agentResp, err := h.Registry.RequestRestart(institution.AgentID, serviceName, 10*time.Second)
+	if err != nil {
 		auditLog := models.AuditLog{
 			InstitutionID: instID,
 			ServiceName:   serviceName,
@@ -333,12 +298,35 @@ func (h *FrontendHandler) RestartService(c *gin.Context) {
 			Status:        "FAILED",
 			TriggeredBy:   userEmail,
 			Timestamp:     time.Now().Local(),
-			Details:       "Timeout waiting for agent response",
+			Details:       err.Error(),
 		}
 		_ = h.Repo.CreateAuditLog(c.Request.Context(), &auditLog)
-
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "timeout waiting for agent response"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
 	}
+
+	statusVal := "FAILED"
+	success, ok := agentResp["success"].(bool)
+	if ok && success {
+		statusVal = "SUCCESS"
+	}
+
+	detailsStr, _ := agentResp["message"].(string)
+
+	auditLog := models.AuditLog{
+		InstitutionID: instID,
+		ServiceName:   serviceName,
+		Action:        "RESTART_COMMAND",
+		Status:        statusVal,
+		TriggeredBy:   userEmail,
+		Timestamp:     time.Now().Local(),
+		Details:       detailsStr,
+	}
+	if err := h.Repo.CreateAuditLog(c.Request.Context(), &auditLog); err != nil {
+		agentResp["warning"] = "failed to record audit log"
+	}
+
+	c.JSON(http.StatusOK, agentResp)
 }
 
 // UpdateServiceAutoRestart handles PATCH /institutions/:id/services/:name.
@@ -641,6 +629,15 @@ func (h *FrontendHandler) GetAuditLogs(c *gin.Context) {
 	if institutionID := c.Query("institution_id"); institutionID != "" {
 		filter["institution_id"] = institutionID
 	}
+	if search := c.Query("search"); search != "" {
+		filter["$search"] = search
+	}
+	if sortField := c.Query("sort_field"); sortField != "" {
+		filter["$sort_field"] = sortField
+	}
+	if sortDir := c.Query("sort_dir"); sortDir != "" {
+		filter["$sort_dir"] = sortDir
+	}
 
 	logs, total, err := h.Repo.GetAuditLogs(c.Request.Context(), filter, page, limit)
 	if err != nil {
@@ -668,4 +665,51 @@ func (h *FrontendHandler) GetAuditLogs(c *gin.Context) {
 		},
 	})
 
+}
+
+// ExportAuditLogs returns ALL matching audit logs without pagination for CSV export.
+func (h *FrontendHandler) ExportAuditLogs(c *gin.Context) {
+	filter := map[string]interface{}{}
+	if startDate := c.Query("start_date"); startDate != "" {
+		if t, err := time.Parse(time.RFC3339, startDate); err == nil {
+			if filter["timestamp"] == nil {
+				filter["timestamp"] = map[string]interface{}{}
+			}
+			filter["timestamp"].(map[string]interface{})["$gte"] = t
+		}
+	}
+	if endDate := c.Query("end_date"); endDate != "" {
+		if t, err := time.Parse(time.RFC3339, endDate); err == nil {
+			if filter["timestamp"] == nil {
+				filter["timestamp"] = map[string]interface{}{}
+			}
+			filter["timestamp"].(map[string]interface{})["$lte"] = t
+		}
+	}
+	if action := c.Query("action"); action != "" {
+		filter["action"] = action
+	}
+	if status := c.Query("status"); status != "" {
+		filter["status"] = status
+	}
+	if institutionID := c.Query("institution_id"); institutionID != "" {
+		filter["institution_id"] = institutionID
+	}
+	if search := c.Query("search"); search != "" {
+		filter["$search"] = search
+	}
+
+	// Fetch all matching records (max 50000 for safety)
+	logs, err := h.Repo.GetAuditLogsAll(c.Request.Context(), filter)
+	if err != nil {
+		log.Printf("Failed to export audit logs: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to export audit logs"})
+		return
+	}
+
+	if logs == nil {
+		logs = []models.AuditLog{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": logs})
 }

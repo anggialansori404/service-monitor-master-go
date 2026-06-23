@@ -95,6 +95,21 @@ func (h *AgentHandler) Sync(c *gin.Context) {
 		log.Printf("MONGODB BULK UPSERT ERROR in Sync (Agent HTTP): %v", err)
 	}
 
+	// Cleanup: delete services that are no longer reported by the agent
+	newServiceNames := make(map[string]bool, len(req.Services))
+	for _, svc := range req.Services {
+		newServiceNames[svc.Name] = true
+	}
+	for _, old := range oldServicesList {
+		if !newServiceNames[old.Name] {
+			if err := h.Repo.DeleteService(c.Request.Context(), instID, old.Name); err != nil {
+				log.Printf("Cleanup: failed to delete stale service %s for institution %s: %v", old.Name, instID, err)
+			} else {
+				log.Printf("Cleanup: removed stale service %s from institution %s", old.Name, instID)
+			}
+		}
+	}
+
 	for _, svc := range statusChanges {
 		h.AlertMgr.AddEvent(instID, svc.Name, svc.Status, fmt.Sprintf("Reported via Sync at %v", now.Format(time.RFC3339)))
 

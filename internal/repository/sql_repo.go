@@ -307,11 +307,61 @@ func (r *SQLRepository) CountServicesByStatus(instID string, status string) (int
 	return count, err
 }
 
+func (r *SQLRepository) CountServicesByStatusBulk(instIDs []string) (map[string]map[string]int64, error) {
+	if len(instIDs) == 0 {
+		return map[string]map[string]int64{}, nil
+	}
+
+	type row struct {
+		InstitutionID string
+		Status        string
+		Cnt           int64
+	}
+
+	var rows []row
+	err := r.db.Model(&models.Service{}).
+		Select("institution_id, status, COUNT(*) as cnt").
+		Where("institution_id IN ?", instIDs).
+		Group("institution_id, status").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]map[string]int64)
+	for _, r := range rows {
+		if result[r.InstitutionID] == nil {
+			result[r.InstitutionID] = make(map[string]int64)
+		}
+		result[r.InstitutionID][r.Status] = r.Cnt
+	}
+	return result, nil
+}
+
 func (r *SQLRepository) CreateService(service *models.Service) error {
 	if service.ID == "" {
 		service.ID = generateID()
 	}
 	return r.db.Create(service).Error
+}
+
+func (r *SQLRepository) DeleteService(ctx context.Context, instID, name string) error {
+	result := r.db.WithContext(ctx).Where("institution_id = ? AND name = ?", instID, name).Delete(&models.Service{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *SQLRepository) Ping(ctx context.Context) error {
+	sqlDB, err := r.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.PingContext(ctx)
 }
 
 // --- AuditLog ---
@@ -383,54 +433,116 @@ func (r *SQLRepository) UpdateUserPassword(ctx context.Context, id string, hash 
 }
 
 func (r *SQLRepository) GetAuditLogs(ctx context.Context, filter map[string]interface{}, page, limit int) ([]models.AuditLog, int64, error) {
-	query := r.db.WithContext(ctx).Model(&models.AuditLog{})
+	var logs []models.AuditLog
+	var total int64
 
-	// Apply filters safely translating MongoDB style to GORM
-	if filter != nil {
-		if tsFilter, ok := filter["timestamp"].(map[string]interface{}); ok {
-			if gte, ok := tsFilter["$gte"].(time.Time); ok {
-				query = query.Where("timestamp >= ?", gte)
+	query := r.db.WithContext(ctx).
+		Table("audit_logs").
+		Select("audit_logs.*, institutions.name as institution_name").
+		Joins("LEFT JOIN institutions ON institutions.id = audit_logs.institution_id")
+
+	countQuery := r.db.WithContext(ctx).Table("audit_logs")
+
+	for key, val := range filter {
+		switch key {
+		case "action", "status", "institution_id":
+			query = query.Where("audit_logs."+key+" = ?", val)
+			countQuery = countQuery.Where(key+" = ?", val)
+		case "timestamp":
+			if tsMap, ok := val.(map[string]interface{}); ok {
+				if gte, ok := tsMap["$gte"]; ok {
+					query = query.Where("audit_logs.timestamp >= ?", gte)
+					countQuery = countQuery.Where("timestamp >= ?", gte)
+				}
+				if lte, ok := tsMap["$lte"]; ok {
+					query = query.Where("audit_logs.timestamp <= ?", lte)
+					countQuery = countQuery.Where("timestamp <= ?", lte)
+				}
 			}
-			if lte, ok := tsFilter["$lte"].(time.Time); ok {
-				query = query.Where("timestamp <= ?", lte)
+		case "$search":
+			if s, ok := val.(string); ok && s != "" {
+				like := "%" + s + "%"
+				clause := "audit_logs.service_name LIKE ? OR audit_logs.triggered_by LIKE ? OR audit_logs.details LIKE ? OR audit_logs.action LIKE ?"
+				query = query.Where(clause, like, like, like, like)
+				countQuery = countQuery.Where(clause, like, like, like, like)
 			}
-		}
-		if action, ok := filter["action"].(string); ok {
-			query = query.Where("action = ?", action)
-		}
-		if status, ok := filter["status"].(string); ok {
-			query = query.Where("status = ?", status)
-		}
-		if institutionID, ok := filter["institution_id"].(string); ok {
-			query = query.Where("institution_id = ?", institutionID)
 		}
 	}
 
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	if err := countQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
+	}
+
+	sortField := "audit_logs.timestamp"
+	sortDir := "DESC"
+	if sf, ok := filter["$sort_field"].(string); ok && sf != "" {
+		switch sf {
+		case "service_name":
+			sortField = "audit_logs.service_name"
+		case "action":
+			sortField = "audit_logs.action"
+		case "status":
+			sortField = "audit_logs.status"
+		case "triggered_by":
+			sortField = "audit_logs.triggered_by"
+		case "institution_name":
+			sortField = "institutions.name"
+		}
+	}
+	if sd, ok := filter["$sort_dir"].(string); ok && strings.ToUpper(sd) == "ASC" {
+		sortDir = "ASC"
 	}
 
 	offset := (page - 1) * limit
-	var logs []models.AuditLog
-
-	// Instead of lookup via query, we could join or pre-fill, but we'll run a loop for simplicity
-	if err := query.Order("timestamp desc").Offset(offset).Limit(limit).Find(&logs).Error; err != nil {
+	if err := query.Order(sortField + " " + sortDir).Offset(offset).Limit(limit).Find(&logs).Error; err != nil {
 		return nil, 0, err
-	}
-
-	// Quick manual lookup for institution_name
-	for i, log := range logs {
-		var inst models.Institution
-		if r.db.WithContext(ctx).Where("id = ?", log.InstitutionID).First(&inst).Error == nil {
-			logs[i].InstitutionName = inst.Name
-		}
 	}
 
 	if logs == nil {
 		logs = []models.AuditLog{}
 	}
 	return logs, total, nil
+}
+
+func (r *SQLRepository) GetAuditLogsAll(ctx context.Context, filter map[string]interface{}) ([]models.AuditLog, error) {
+	var logs []models.AuditLog
+
+	query := r.db.WithContext(ctx).
+		Table("audit_logs").
+		Select("audit_logs.*, institutions.name as institution_name").
+		Joins("LEFT JOIN institutions ON institutions.id = audit_logs.institution_id").
+		Limit(50000)
+
+	for key, val := range filter {
+		switch key {
+		case "action", "status", "institution_id":
+			query = query.Where("audit_logs."+key+" = ?", val)
+		case "timestamp":
+			if tsMap, ok := val.(map[string]interface{}); ok {
+				if gte, ok := tsMap["$gte"]; ok {
+					query = query.Where("audit_logs.timestamp >= ?", gte)
+				}
+				if lte, ok := tsMap["$lte"]; ok {
+					query = query.Where("audit_logs.timestamp <= ?", lte)
+				}
+			}
+		case "$search":
+			if s, ok := val.(string); ok && s != "" {
+				like := "%" + s + "%"
+				clause := "audit_logs.service_name LIKE ? OR audit_logs.triggered_by LIKE ? OR audit_logs.details LIKE ? OR audit_logs.action LIKE ?"
+				query = query.Where(clause, like, like, like, like)
+			}
+		}
+	}
+
+	if err := query.Order("audit_logs.timestamp DESC").Find(&logs).Error; err != nil {
+		return nil, err
+	}
+
+	if logs == nil {
+		logs = []models.AuditLog{}
+	}
+	return logs, nil
 }
 
 // --- Settings ---

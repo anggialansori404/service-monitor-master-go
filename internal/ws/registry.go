@@ -104,3 +104,31 @@ func (r *Registry) ConnectedCount() int {
 	defer r.mu.RUnlock()
 	return len(r.clients)
 }
+
+// RestartRequest sends a restart command to an agent and waits synchronously for the response.
+// Returns the response or an error on timeout or send failure.
+// Caller is responsible for auditing/logging the result.
+func (r *Registry) RequestRestart(agentID, serviceName string, timeout time.Duration) (WsResponse, error) {
+	reqID := fmt.Sprintf("req-%d", time.Now().UnixNano())
+
+	respChan := make(chan WsResponse)
+	r.PendingRequests.Store(reqID, respChan)
+	defer r.PendingRequests.Delete(reqID)
+
+	payload := map[string]interface{}{
+		"request_id": reqID,
+		"action":     "restart",
+		"service":    serviceName,
+	}
+
+	if err := r.SendToAgent(agentID, payload); err != nil {
+		return nil, err
+	}
+
+	select {
+	case resp := <-respChan:
+		return resp, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("timeout waiting for agent response")
+	}
+}

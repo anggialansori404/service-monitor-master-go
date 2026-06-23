@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -30,7 +31,7 @@ func LoadConfig() *Config {
 	// Best-effort: load .env if it exists, ignore error if missing.
 	_ = godotenv.Load()
 
-	return &Config{
+	cfg := &Config{
 		DBDriver:   getEnv("DB_DRIVER", "postgres"),
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBUser:     getEnv("DB_USER", "postgres"),
@@ -42,10 +43,16 @@ func LoadConfig() *Config {
 		DBMongoURI: getEnv("DB_MONGO_URI", "mongodb://localhost:27017/monitoring"),
 
 		BotToken:  getEnv("BOT_TOKEN", ""),
-		JWTSecret: getEnv("JWT_SECRET", "change-me-in-production"),
+		JWTSecret: getEnv("JWT_SECRET", ""),
 		Port:      getEnv("PORT", "8080"),
 	}
- }
+
+	if cfg.JWTSecret == "" {
+		log.Fatal("JWT_SECRET must be set")
+	}
+
+	return cfg
+}
 
 // getEnv returns the value of the environment variable named by key,
 // or fallback if the variable is empty or unset.

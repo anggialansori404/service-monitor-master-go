@@ -159,7 +159,12 @@ func (m *mockRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bo
 	return nil
 }
 func (m *mockRepo) CountServicesByStatus(_ string, _ string) (int64, error)       { return 0, nil }
+func (m *mockRepo) CountServicesByStatusBulk(_ []string) (map[string]map[string]int64, error) {
+	return nil, nil
+}
 func (m *mockRepo) CreateService(_ *models.Service) error                          { return nil }
+func (m *mockRepo) DeleteService(_ context.Context, _, _ string) error             { return nil }
+func (m *mockRepo) Ping(_ context.Context) error                                   { return nil }
 func (m *mockRepo) CreateAuditLog(_ context.Context, _ *models.AuditLog) error     { return nil }
 func (m *mockRepo) CreateSecurityLog(_ context.Context, _ *models.SecurityLog) error {
 	return nil
@@ -173,6 +178,9 @@ func (m *mockRepo) GetUserByID(_ context.Context, _ string) (*models.User, error
 func (m *mockRepo) UpdateUserPassword(_ context.Context, _ string, _ string) error { return nil }
 func (m *mockRepo) GetAuditLogs(_ context.Context, _ map[string]interface{}, _, _ int) ([]models.AuditLog, int64, error) {
 	return nil, 0, nil
+}
+func (m *mockRepo) GetAuditLogsAll(_ context.Context, _ map[string]interface{}) ([]models.AuditLog, error) {
+	return nil, nil
 }
 func (m *mockRepo) GetSettings(_ context.Context) (*models.GlobalSetting, error)  { return nil, nil }
 func (m *mockRepo) UpdateSettings(_ context.Context, _ *models.GlobalSetting) error { return nil }

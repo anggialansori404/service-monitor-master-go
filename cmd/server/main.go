@@ -197,7 +197,16 @@ func main() {
 	scheduleHandler := handlers.NewScheduleHandler(repo, sched)
 	scheduleHandler.Registry = registry
 
+	// --- Health handler ---
+	healthHandler := handlers.NewHealthHandler(repo)
+
 	// --- Routes ---
+	// Health endpoints (no auth required)
+	{
+		r.GET("/health", healthHandler.Health)
+		r.GET("/ready", healthHandler.Ready)
+	}
+
 	// Agent endpoints (authenticated via X-Agent-ID / X-Secret-Key)
 	agentGroup := r.Group("/api/v1/agent", middleware.AgentAuth(repo))
 	{
@@ -213,6 +222,7 @@ func main() {
 	{
 		protectedGroup.PUT("/users/password", frontendHandler.ChangePassword)
 		protectedGroup.GET("/audit-logs", frontendHandler.GetAuditLogs)
+		protectedGroup.GET("/audit-logs/export", frontendHandler.ExportAuditLogs)
 
 		// Global Settings
 		protectedGroup.GET("/settings", settingHandler.GetSettings)

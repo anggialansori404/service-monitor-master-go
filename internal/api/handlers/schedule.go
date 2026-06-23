@@ -445,30 +445,17 @@ func (h *ScheduleHandler) TriggerSchedule(c *gin.Context) {
 	failCount := 0
 
 	for _, serviceName := range schedule.ServiceNames {
-		result := gin.H{"service": serviceName, "status": "FAILED", "message": ""}
+		func() {
+			result := gin.H{"service": serviceName, "status": "FAILED", "message": ""}
 
-		reqID := fmt.Sprintf("sched-manual-%d", time.Now().UnixNano())
+			resp, err := h.Registry.RequestRestart(institution.AgentID, serviceName, 10*time.Second)
+			if err != nil {
+				result["message"] = "agent offline: " + err.Error()
+				failCount++
+				results = append(results, result)
+				return
+			}
 
-		respChan := make(chan ws.WsResponse)
-		h.Registry.PendingRequests.Store(reqID, respChan)
-		defer h.Registry.PendingRequests.Delete(reqID)
-
-		payload := map[string]interface{}{
-			"request_id": reqID,
-			"action":     "restart",
-			"service":    serviceName,
-		}
-
-		err := h.Registry.SendToAgent(institution.AgentID, payload)
-		if err != nil {
-			result["message"] = "agent offline: " + err.Error()
-			failCount++
-			results = append(results, result)
-			continue
-		}
-
-		select {
-		case resp := <-respChan:
 			success, ok := resp["success"].(bool)
 			if ok && success {
 				result["status"] = "SUCCESS"
@@ -479,12 +466,9 @@ func (h *ScheduleHandler) TriggerSchedule(c *gin.Context) {
 			if msg, ok := resp["message"].(string); ok {
 				result["message"] = msg
 			}
-		case <-time.After(10 * time.Second):
-			result["message"] = "timeout waiting for agent response"
-			failCount++
-		}
 
-		results = append(results, result)
+			results = append(results, result)
+		}()
 	}
 
 	// Determine overall status.

@@ -561,6 +561,51 @@ func (r *MongoRepository) CountServicesByStatus(instID string, status string) (i
 	return coll.CountDocuments(context.TODO(), bson.M{"institution_id": instID, "status": status})
 }
 
+func (r *MongoRepository) CountServicesByStatusBulk(instIDs []string) (map[string]map[string]int64, error) {
+	if len(instIDs) == 0 {
+		return map[string]map[string]int64{}, nil
+	}
+
+	coll := r.db.Collection("services")
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"institution_id": bson.M{"$in": instIDs}}}},
+		{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: bson.D{
+				{Key: "institution_id", Value: "$institution_id"},
+				{Key: "status", Value: "$status"},
+			}},
+			{Key: "cnt", Value: bson.D{{Key: "$sum", Value: 1}}},
+		}}},
+	}
+
+	cursor, err := coll.Aggregate(context.TODO(), pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(context.TODO())
+
+	var docs []struct {
+		ID struct {
+			InstitutionID string `bson:"institution_id"`
+			Status        string `bson:"status"`
+		} `bson:"_id"`
+		Cnt int64 `bson:"cnt"`
+	}
+	if err := cursor.All(context.TODO(), &docs); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]map[string]int64)
+	for _, doc := range docs {
+		instID := doc.ID.InstitutionID
+		if result[instID] == nil {
+			result[instID] = make(map[string]int64)
+		}
+		result[instID][doc.ID.Status] = doc.Cnt
+	}
+	return result, nil
+}
+
 func (r *MongoRepository) CreateService(service *models.Service) error {
 	coll := r.db.Collection("services")
 	if service.ID == "" {
@@ -568,6 +613,23 @@ func (r *MongoRepository) CreateService(service *models.Service) error {
 	}
 	_, err := coll.InsertOne(context.TODO(), service)
 	return err
+}
+
+func (r *MongoRepository) DeleteService(ctx context.Context, instID, name string) error {
+	coll := r.db.Collection("services")
+	filter := bson.M{"institution_id": instID, "name": name}
+	result, err := coll.DeleteOne(ctx, filter)
+	if err != nil {
+		return err
+	}
+	if result.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *MongoRepository) Ping(ctx context.Context) error {
+	return r.db.Client().Ping(ctx, nil)
 }
 
 // --- AuditLog ---
@@ -703,7 +765,50 @@ func (r *MongoRepository) UpdateUserPassword(ctx context.Context, id string, has
 func (r *MongoRepository) GetAuditLogs(ctx context.Context, filter map[string]interface{}, page, limit int) ([]models.AuditLog, int64, error) {
 	coll := r.db.Collection("audit_logs")
 
-	total, err := coll.CountDocuments(ctx, filter)
+	// Separate sort/search from filter
+	matchFilter := bson.M{}
+	searchFilter := bson.M{}
+	var hasSearch bool
+	sortField := "timestamp"
+	sortDir := -1
+
+	for k, v := range filter {
+		switch k {
+		case "$search":
+			if s, ok := v.(string); ok && s != "" {
+				hasSearch = true
+				searchFilter = bson.M{
+					"$or": []bson.M{
+						{"service_name": bson.M{"$regex": s, "$options": "i"}},
+						{"triggered_by": bson.M{"$regex": s, "$options": "i"}},
+						{"details": bson.M{"$regex": s, "$options": "i"}},
+						{"action": bson.M{"$regex": s, "$options": "i"}},
+					},
+				}
+			}
+		case "$sort_field":
+			if sf, ok := v.(string); ok && sf != "" {
+				switch sf {
+				case "service_name", "action", "status", "triggered_by", "institution_name":
+					sortField = sf
+				}
+			}
+		case "$sort_dir":
+			if sd, ok := v.(string); ok && strings.ToUpper(sd) == "ASC" {
+				sortDir = 1
+			}
+		default:
+			matchFilter[k] = v
+		}
+	}
+
+	if hasSearch {
+		for k, v := range searchFilter {
+			matchFilter[k] = v
+		}
+	}
+
+	total, err := coll.CountDocuments(ctx, matchFilter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -711,8 +816,8 @@ func (r *MongoRepository) GetAuditLogs(ctx context.Context, filter map[string]in
 	skip := (page - 1) * limit
 
 	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: filter}},
-		{{Key: "$sort", Value: bson.D{{Key: "timestamp", Value: -1}}}},
+		{{Key: "$match", Value: matchFilter}},
+		{{Key: "$sort", Value: bson.D{{Key: sortField, Value: sortDir}}}},
 		{{Key: "$skip", Value: skip}},
 		{{Key: "$limit", Value: limit}},
 		{{Key: "$lookup", Value: bson.D{
@@ -732,10 +837,6 @@ func (r *MongoRepository) GetAuditLogs(ctx context.Context, filter map[string]in
 			{Key: "institution_info", Value: 0},
 		}}},
 	}
-
-	// Because we store institution_id as string now but legacy relies on ObjectID,
-	// the $lookup might fail to match. We can convert it in the pipeline or just let it be.
-	// We'll leave the pipeline as is, but if institution_name is empty it's fine.
 
 	cursor, err := coll.Aggregate(ctx, pipeline)
 	if err != nil {
@@ -768,7 +869,6 @@ func (r *MongoRepository) GetAuditLogs(ctx context.Context, filter map[string]in
 			docID = s
 		}
 
-		// Handle legacy ObjectID vs new String ID
 		instIDStr := ""
 		if oid, ok := doc.InstitutionID.(bson.ObjectID); ok {
 			instIDStr = oid.Hex()
@@ -794,6 +894,106 @@ func (r *MongoRepository) GetAuditLogs(ctx context.Context, filter map[string]in
 		logs = []models.AuditLog{}
 	}
 	return logs, total, nil
+}
+
+func (r *MongoRepository) GetAuditLogsAll(ctx context.Context, filter map[string]interface{}) ([]models.AuditLog, error) {
+	coll := r.db.Collection("audit_logs")
+
+	matchFilter := bson.M{}
+	for k, v := range filter {
+		switch k {
+		case "$search":
+			if s, ok := v.(string); ok && s != "" {
+				matchFilter["$or"] = []bson.M{
+					{"service_name": bson.M{"$regex": s, "$options": "i"}},
+					{"triggered_by": bson.M{"$regex": s, "$options": "i"}},
+					{"details": bson.M{"$regex": s, "$options": "i"}},
+					{"action": bson.M{"$regex": s, "$options": "i"}},
+				}
+			}
+		default:
+			matchFilter[k] = v
+		}
+	}
+
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: matchFilter}},
+		{{Key: "$sort", Value: bson.D{{Key: "timestamp", Value: -1}}}},
+		{{Key: "$limit", Value: 50000}},
+		{{Key: "$lookup", Value: bson.D{
+			{Key: "from", Value: "institutions"},
+			{Key: "localField", Value: "institution_id"},
+			{Key: "foreignField", Value: "_id"},
+			{Key: "as", Value: "institution_info"},
+		}}},
+		{{Key: "$unwind", Value: bson.D{
+			{Key: "path", Value: "$institution_info"},
+			{Key: "preserveNullAndEmptyArrays", Value: true},
+		}}},
+		{{Key: "$addFields", Value: bson.D{
+			{Key: "institution_name", Value: "$institution_info.name"},
+		}}},
+		{{Key: "$project", Value: bson.D{
+			{Key: "institution_info", Value: 0},
+		}}},
+	}
+
+	cursor, err := coll.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var docs []struct {
+		ID              interface{} `bson:"_id"`
+		InstitutionID   interface{} `bson:"institution_id"`
+		InstitutionName string      `bson:"institution_name,omitempty"`
+		ServiceName     string      `bson:"service_name"`
+		Action          string      `bson:"action"`
+		Status          string      `bson:"status"`
+		TriggeredBy     string      `bson:"triggered_by"`
+		Details         string      `bson:"details,omitempty"`
+		Timestamp       time.Time   `bson:"timestamp"`
+		CreatedAt       time.Time   `bson:"created_at"`
+	}
+	if err := cursor.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+
+	var logs []models.AuditLog
+	for _, doc := range docs {
+		var docID string
+		if oid, ok := doc.ID.(bson.ObjectID); ok {
+			docID = oid.Hex()
+		} else if s, ok := doc.ID.(string); ok {
+			docID = s
+		}
+
+		instIDStr := ""
+		if oid, ok := doc.InstitutionID.(bson.ObjectID); ok {
+			instIDStr = oid.Hex()
+		} else if s, ok := doc.InstitutionID.(string); ok {
+			instIDStr = s
+		}
+
+		logs = append(logs, models.AuditLog{
+			ID:              docID,
+			InstitutionID:   instIDStr,
+			InstitutionName: doc.InstitutionName,
+			ServiceName:     doc.ServiceName,
+			Action:          doc.Action,
+			Status:          doc.Status,
+			TriggeredBy:     doc.TriggeredBy,
+			Details:         doc.Details,
+			Timestamp:       doc.Timestamp,
+			CreatedAt:       doc.CreatedAt,
+		})
+	}
+
+	if logs == nil {
+		logs = []models.AuditLog{}
+	}
+	return logs, nil
 }
 
 // --- Settings ---
