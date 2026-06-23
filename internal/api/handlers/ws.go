@@ -76,7 +76,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	// On reconnect, edit the previous "disconnected" Telegram message to "recovered"
 	if msgID, ok := h.disconnectMsgIDs[instID]; ok && msgID != 0 {
 		if setting, err := h.Repo.GetSettings(context.Background()); err == nil && setting.EnableTelegramAlerts {
-			recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\\n\\nNode Agent kembali tersambung!\\n🏢 *Lembaga:* %s\\n⏰ *Waktu:* %s\\n\\n_Sistem kembali normal._",
+			recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\n\nNode Agent kembali tersambung!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Sistem kembali normal._",
 				institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
 			if err := services.EditTelegramMessage(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msgID, recoveryMsg); err != nil {
 				log.Printf("Failed to edit disconnect alert for %s (msgID %d): %v — sending new recovery message", institution.Name, msgID, err)
@@ -92,7 +92,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 		log.Printf("agent disconnected: %s (institution: %s)", agentID, institution.Name)
 
 		// TRIGGER TELEGRAM ALERT — track message_id for later edit
-		alertMsg := fmt.Sprintf("🔴 *CRITICAL ALERT*\\n\\nNode Agent terputus (Offline)!\\n🏢 *Lembaga:* %s\\n⏰ *Waktu:* %s\\n\\n_Mohon segera periksa server/VPS lembaga terkait._",
+		alertMsg := fmt.Sprintf("🔴 *CRITICAL ALERT*\n\nNode Agent terputus (Offline)!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Mohon segera periksa server/VPS lembaga terkait._",
 			institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
 
 		if setting, err := h.Repo.GetSettings(context.Background()); err == nil && setting.EnableTelegramAlerts {
