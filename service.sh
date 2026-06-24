@@ -105,6 +105,29 @@ restart() {
     start
 }
 
+compress() {
+    if is_running; then
+        echo -e "${YELLOW}Stop the service first before compressing${NC}"
+        exit 1
+    fi
+
+    if ! command -v upx &> /dev/null; then
+        echo -e "${YELLOW}UPX not found. Installing...${NC}"
+        sudo apt update && sudo apt install upx-ucl -y
+    fi
+
+    if [ ! -f "$BINARY_NAME" ]; then
+        echo -e "${RED}$BINARY_NAME not found${NC}"
+        exit 1
+    fi
+
+    BEFORE=$(stat -c%s "$BINARY_NAME" 2>/dev/null || stat -f%z "$BINARY_NAME" 2>/dev/null)
+    echo -e "${GREEN}Compressing $BINARY_NAME with UPX...${NC}"
+    upx --best --lzma "$BINARY_NAME"
+    AFTER=$(stat -c%s "$BINARY_NAME" 2>/dev/null || stat -f%z "$BINARY_NAME" 2>/dev/null)
+    echo -e "${GREEN}Done: $BEFORE → $AFTER bytes${NC}"
+}
+
 case "$1" in
     start)
         start
@@ -118,8 +141,11 @@ case "$1" in
     restart)
         restart
         ;;
+    compress)
+        compress
+        ;;
     *)
-        echo "Usage: $0 {start|stop|status|restart}"
+        echo "Usage: $0 {start|stop|status|restart|compress}"
         exit 1
         ;;
 esac
