@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"monitoring-master/internal/bot"
 	"monitoring-master/internal/config"
 	"monitoring-master/internal/database"
+	"monitoring-master/internal/logutil"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 	"monitoring-master/internal/alert"
@@ -33,6 +35,17 @@ import (
 )
 
 func main() {
+	// --- Rotating Log: auto-switch file at midnight ---
+	logWriter, err := logutil.Setup("logs")
+	if err != nil {
+		log.Fatalf("Failed to setup rotating log: %v", err)
+	}
+	defer logWriter.Close()
+
+	// Redirect Gin's default logger to same rotating writer
+	gin.DefaultWriter = io.MultiWriter(logWriter, os.Stdout)
+	gin.DefaultErrorWriter = io.MultiWriter(logWriter, os.Stderr)
+
 	// Set timezone to Asia/Jakarta for consistent timestamp handling
 	loc, err := time.LoadLocation("Asia/Jakarta")
 	if err != nil {

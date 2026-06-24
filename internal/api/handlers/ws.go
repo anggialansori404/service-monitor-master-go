@@ -30,7 +30,7 @@ type WSHandler struct {
 	Registry          *ws.Registry
 	Repo              repository.Repository
 	AlertMgr          *alert.Manager
-	disconnectMsgIDs  map[string]int // institutionID -> telegram message_id of last disconnect alert
+	disconnectMsgIDs  map[string][]int // institutionID -> telegram message_ids of last disconnect alerts
 }
 
 // NewWSHandler creates a new WSHandler.
@@ -39,7 +39,7 @@ func NewWSHandler(registry *ws.Registry, repo repository.Repository, alertMgr *a
 		Registry:         registry,
 		Repo:             repo,
 		AlertMgr:         alertMgr,
-		disconnectMsgIDs: make(map[string]int),
+		disconnectMsgIDs: make(map[string][]int),
 	}
 }
 
@@ -73,15 +73,18 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	h.Registry.Register(client)
 	log.Printf("agent connected: %s (institution: %s)", agentID, institution.Name)
 
-	// On reconnect, edit the previous "disconnected" Telegram message to "recovered"
-	if msgID, ok := h.disconnectMsgIDs[instID]; ok && msgID != 0 {
+	// On reconnect, edit ALL previous "disconnected" Telegram messages to "recovered"
+	if msgIDs, ok := h.disconnectMsgIDs[instID]; ok && len(msgIDs) > 0 {
 		if setting, err := h.Repo.GetSettings(context.Background()); err == nil && setting.EnableTelegramAlerts {
 			recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\n\nNode Agent kembali tersambung!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Sistem kembali normal._",
 				institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
-			if err := services.EditTelegramMessage(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msgID, recoveryMsg); err != nil {
-				log.Printf("Failed to edit disconnect alert for %s (msgID %d): %v — sending new recovery message", institution.Name, msgID, err)
-				// Fallback: send a new message instead
-				_, _ = services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, recoveryMsg)
+			for _, msgID := range msgIDs {
+				if msgID == 0 {
+					continue
+				}
+				if err := services.EditTelegramMessage(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msgID, recoveryMsg); err != nil {
+					log.Printf("Failed to edit disconnect alert for %s (msgID %d): %v", institution.Name, msgID, err)
+				}
 			}
 		}
 		delete(h.disconnectMsgIDs, instID)
@@ -100,8 +103,8 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			if sendErr != nil {
 				log.Printf("Failed to send disconnect alert for %s: %v", institution.Name, sendErr)
 			} else if msgID != 0 {
-				h.disconnectMsgIDs[instID] = msgID
-				log.Printf("Saved disconnect message_id %d for institution %s", msgID, institution.Name)
+				h.disconnectMsgIDs[instID] = append(h.disconnectMsgIDs[instID], msgID)
+				log.Printf("Saved disconnect message_id %d for institution %s (total pending: %d)", msgID, institution.Name, len(h.disconnectMsgIDs[instID]))
 			}
 		}
 	}()
