@@ -52,7 +52,7 @@ func (h *FrontendHandler) Login(c *gin.Context) {
 	// --- CAPTCHA validation ---
 	captchaProvider := os.Getenv("CAPTCHA_PROVIDER")
 	if captchaProvider == "" {
-		captchaProvider = "local"
+		captchaProvider = "auto"
 	}
 
 	switch captchaProvider {
@@ -61,14 +61,12 @@ func (h *FrontendHandler) Login(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "cf_token is required"})
 			return
 		}
-		claims, err := verifyLocalCaptchaToken(req.CfToken, h.CaptchaSecret)
+		_, err := verifyLocalCaptchaToken(req.CfToken, h.CaptchaSecret)
 		if err != nil {
 			log.Printf("CAPTCHA FAILED (local): %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired captcha token"})
 			return
 		}
-		// Token valid, we don't need the answer — it was pre-verified client-side
-		_ = claims
 
 	case "turnstile":
 		if req.CfToken == "" {
@@ -81,6 +79,31 @@ func (h *FrontendHandler) Login(c *gin.Context) {
 			log.Printf("CAPTCHA FAILED (turnstile): ok=%v err=%v", ok, err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "turnstile verification failed"})
 			return
+		}
+
+	case "auto", "both":
+		// Auto-detect: accept either local or turnstile token
+		if req.CfToken == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cf_token is required"})
+			return
+		}
+		// Try local first (fast, no network)
+		if _, err := verifyLocalCaptchaToken(req.CfToken, h.CaptchaSecret); err == nil {
+			// Valid local token
+		} else {
+			// Not a local token, try turnstile
+			secretKey := os.Getenv("TURNSTILE_SECRET_KEY")
+			if secretKey == "" {
+				log.Printf("CAPTCHA FAILED (auto): not a local token and TURNSTILE_SECRET_KEY not set")
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid captcha token"})
+				return
+			}
+			ok, err := verifyTurnstileToken(req.CfToken, secretKey)
+			if err != nil || !ok {
+				log.Printf("CAPTCHA FAILED (auto): local=%v turnstile=(ok=%v, err=%v)", false, ok, err)
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired captcha token"})
+				return
+			}
 		}
 
 	case "none":
