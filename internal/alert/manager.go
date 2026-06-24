@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,12 +24,20 @@ type AlertEvent struct {
 	Timestamp     time.Time
 }
 
+// batchState tracks an active Telegram batch alert for one institution.
+// Used to edit the batch message when services recover.
+type batchState struct {
+	MessageID   int
+	DownService map[string]AlertEvent // key: serviceName
+}
+
 // Manager handles alert deduplication and batched sending
 type Manager struct {
 	repo         repository.Repository
 	EventChan    chan AlertEvent
 	debounceMap  map[string]*time.Timer
 	pendingDowns map[string]AlertEvent // key: instID_serviceName
+	batchStates  map[string]*batchState // instID -> active batch message
 	mu           sync.Mutex
 	debounceTime time.Duration
 }
@@ -43,6 +52,7 @@ func NewManager(repo repository.Repository, debounceTime time.Duration) *Manager
 		EventChan:    make(chan AlertEvent, 1000),
 		debounceMap:  make(map[string]*time.Timer),
 		pendingDowns: make(map[string]AlertEvent),
+		batchStates:  make(map[string]*batchState),
 		debounceTime: debounceTime,
 	}
 }
@@ -73,53 +83,141 @@ func (m *Manager) AddEvent(instID, serviceName, status, message string) {
 }
 
 func (m *Manager) handleEvent(ctx context.Context, event AlertEvent) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	key := fmt.Sprintf("%s_%s", event.InstitutionID, event.ServiceName)
 
 	switch event.Status {
 	case "DOWN":
-		// If a timer already exists, we do NOT reset it. This ensures that repeated DOWN
-		// events (like auto-restart logs) don't delay the notification forever.
-		if _, ok := m.debounceMap[key]; ok {
-			// Just update the pending message if needed, but keep the original timer running
-			m.pendingDowns[key] = event
-			return
-		}
-
-		// Store it in pending and start a timer
-		m.pendingDowns[key] = event
-
-		// Create a new timer
-		// Note: The timer runs in a separate goroutine. It must re-acquire lock when processTimeout fires.
-		timer := time.AfterFunc(m.debounceTime, func() {
-			m.processTimeout(context.Background(), key)
-		})
-		m.debounceMap[key] = timer
+		m.handleDown(ctx, key, event)
 
 	case "UP":
-		// If it was pending DOWN, clear the timer (Recovery during debounce window!)
+		m.handleUp(ctx, key, event)
+	}
+}
+
+func (m *Manager) handleDown(_ context.Context, key string, event AlertEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// If a timer already exists, do NOT reset it. Just update the pending message.
+	if _, ok := m.debounceMap[key]; ok {
+		m.pendingDowns[key] = event
+		return
+	}
+
+	// Store it in pending and start a timer
+	m.pendingDowns[key] = event
+
+	timer := time.AfterFunc(m.debounceTime, func() {
+		m.processTimeout(context.Background(), key)
+	})
+	m.debounceMap[key] = timer
+}
+
+func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
+	instID := event.InstitutionID
+
+	m.mu.Lock()
+
+	// Case 1: Still in debounce window — flap mitigation
+	if _, ok := m.debounceMap[key]; ok {
+		// Stop the timer, clean up
 		if t, ok := m.debounceMap[key]; ok {
 			t.Stop()
-			delete(m.debounceMap, key)
-			delete(m.pendingDowns, key)
-			log.Printf("Flap detected and mitigated for %s: it recovered within %v", key, m.debounceTime)
-		} else {
-			// It's not in pendingDowns, meaning it already triggered the real alert long ago.
-			// Send recovery alert instantly!
-			m.sendDirectAlert(ctx, event)
+		}
+		delete(m.debounceMap, key)
+		delete(m.pendingDowns, key)
+		m.mu.Unlock()
+		log.Printf("Flap detected and mitigated for %s: it recovered within %v", key, m.debounceTime)
+		return
+	}
+
+	// Case 2: Timer already fired — check active batch
+	bs, hasBatch := m.batchStates[instID]
+
+	// Clean up pendingDowns if still there (edge case)
+	delete(m.pendingDowns, key)
+
+	m.mu.Unlock()
+
+	if hasBatch {
+		// Edit the existing batch Telegram message
+		m.editBatchOnRecovery(ctx, instID, bs, event)
+	} else {
+		// No active batch — send standalone recovery
+		m.sendDirectAlert(ctx, event)
+	}
+}
+
+// editBatchOnRecovery removes a recovered service from the active batch message
+// and edits the Telegram message.
+func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *batchState, recoveryEvent AlertEvent) {
+	m.mu.Lock()
+
+	// Remove this service from the batch
+	delete(bs.DownService, recoveryEvent.ServiceName)
+
+	remaining := len(bs.DownService)
+	msgID := bs.MessageID
+
+	if remaining == 0 {
+		// All services recovered — delete batch state
+		delete(m.batchStates, instID)
+	}
+	m.mu.Unlock()
+
+	// Build the new message text
+	inst, err := m.repo.GetInstitutionByID(instID)
+	if err != nil {
+		log.Printf("AlertEngine error: failed to fetch institution %s for recovery edit: %v", instID, err)
+		return
+	}
+
+	var newText string
+	if remaining == 0 {
+		// All clear
+		newText = fmt.Sprintf("✅ *ALL SERVICES RECOVERED*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Semua service telah kembali normal._",
+			inst.Name, time.Now().Local().Format("02 Jan 2006 15:04:05"))
+	} else {
+		// Still some down — rebuild the list
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("🟡 *CRITICAL ALERT BATCH (UPDATED)*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n",
+			inst.Name, time.Now().Local().Format("02 Jan 2006 15:04:05")))
+		sb.WriteString(fmt.Sprintf("_✅ Baru pulih: %s_\n\n", recoveryEvent.ServiceName))
+		sb.WriteString(fmt.Sprintf("_Daftar Service Masih DOWN (%d):_\n", remaining))
+
+		// Sort service names for consistent output
+		names := make([]string, 0, len(bs.DownService))
+		for name := range bs.DownService {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		i := 1
+		for _, name := range names {
+			sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i, name))
+			i++
+		}
+		newText = sb.String()
+	}
+
+	// Edit the Telegram message
+	setting, err := m.repo.GetSettings(ctx)
+	if err == nil && setting.EnableTelegramAlerts {
+		log.Printf("AlertEngine editing BATCH message %d for %s (recovery: %s, remaining: %d)",
+			msgID, inst.Name, recoveryEvent.ServiceName, remaining)
+		if err := services.EditTelegramMessage(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msgID, newText); err != nil {
+			log.Printf("Failed to edit batch alert for %s (msgID %d): %v", inst.Name, msgID, err)
 		}
 	}
 }
 
 func (m *Manager) processTimeout(ctx context.Context, key string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Double check if it's still pending
 	event, exists := m.pendingDowns[key]
 	if !exists {
+		m.mu.Unlock()
 		return
 	}
 
@@ -127,18 +225,13 @@ func (m *Manager) processTimeout(ctx context.Context, key string) {
 	delete(m.debounceMap, key)
 	delete(m.pendingDowns, key)
 
-	log.Printf("Alert Timer fired for %s. Triggering notification protocol.", key)
-
-	// Since we want to GROUP alerts from the same institution...
-	// Gather ALL CURRENT pendingDowns for this institution, fire them all together, and remove their timers!
+	// Gather ALL pendingDowns for this institution, fire them all together
 	instID := event.InstitutionID
 	var servicesDown []AlertEvent
 
-	// Gather all DOWNs for this instID
 	for k, ev := range m.pendingDowns {
 		if ev.InstitutionID == instID {
 			servicesDown = append(servicesDown, ev)
-			// Clean them up too
 			if t, ok := m.debounceMap[k]; ok {
 				t.Stop()
 				delete(m.debounceMap, k)
@@ -147,33 +240,72 @@ func (m *Manager) processTimeout(ctx context.Context, key string) {
 		}
 	}
 
-	servicesDown = append(servicesDown, event) // add the triggering one
+	// Add the triggering event itself
+	// Deduplicate: only add if not already in servicesDown
+	found := false
+	for _, ev := range servicesDown {
+		if ev.ServiceName == event.ServiceName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		servicesDown = append(servicesDown, event)
+	}
+
+	m.mu.Unlock()
 
 	if len(servicesDown) > 0 {
+		log.Printf("Alert Timer fired for %s (%d services down). Triggering notification protocol.", key, len(servicesDown))
 		m.sendBatchedAlert(ctx, instID, servicesDown)
 	}
 }
 
 func (m *Manager) sendBatchedAlert(ctx context.Context, instID string, events []AlertEvent) {
-	// Group them into one telegram message
 	inst, err := m.repo.GetInstitutionByID(instID)
 	if err != nil {
 		log.Printf("AlertEngine error: failed to fetch institution %s: %v", instID, err)
 		return
 	}
 
+	// Build downService map for tracking
+	downMap := make(map[string]AlertEvent)
+	for _, ev := range events {
+		downMap[ev.ServiceName] = ev
+	}
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("🔴 *CRITICAL ALERT BATCH*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n", inst.Name, time.Now().Local().Format("02 Jan 2006 15:04:05")))
 	sb.WriteString("_Daftar Service Terkena Dampak (DOWN):_\n")
-	
-	for i, ev := range events {
-		sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i+1, ev.ServiceName))
+
+	// Sort for consistent output
+	names := make([]string, 0, len(events))
+	for _, ev := range events {
+		names = append(names, ev.ServiceName)
+	}
+	sort.Strings(names)
+
+	for i, name := range names {
+		sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i+1, name))
 	}
 
 	setting, err := m.repo.GetSettings(ctx)
 	if err == nil && setting.EnableTelegramAlerts {
 		log.Printf("AlertEngine sending BATCH telegram message to %s", inst.Name)
-		services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, sb.String())
+		msgID, sendErr := services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, sb.String())
+		if sendErr != nil {
+			log.Printf("AlertEngine failed to send batch: %v", sendErr)
+			return
+		}
+
+		// Track the batch message for future edits
+		m.mu.Lock()
+		m.batchStates[instID] = &batchState{
+			MessageID:   msgID,
+			DownService: downMap,
+		}
+		m.mu.Unlock()
+		log.Printf("AlertEngine: batch message_id=%d tracked for institution %s (%d services)", msgID, inst.Name, len(downMap))
 	}
 }
 
@@ -185,12 +317,6 @@ func (m *Manager) sendDirectAlert(ctx context.Context, event AlertEvent) {
 
 	msg := fmt.Sprintf("✅ *SERVICE RECOVERY*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s",
 		inst.Name, event.ServiceName, time.Now().Local().Format("02 Jan 2006 15:04:05"))
-
-	if event.Status == "DOWN" {
-        // Fallback for direct down (unused in current batched logic, but here just in case)
-		msg = fmt.Sprintf("⚠️ *SERVICE DOWN*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s\n\n_Agent sedang mencoba auto-restart._",
-			inst.Name, event.ServiceName, time.Now().Local().Format("02 Jan 2006 15:04:05"))
-	}
 
 	setting, err := m.repo.GetSettings(ctx)
 	if err == nil && setting.EnableTelegramAlerts {

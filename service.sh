@@ -35,14 +35,19 @@ start() {
         return
     fi
 
-    # Daily log file name
-    LOG_FILE="$LOG_DIR/$(date +%Y-%m-%d).log"
-    
+    # Go binary handles its own daily log rotation via logutil.DailyRotatingWriter
+    # Logs are written to: logs/server-YYYY-MM-DD.log
+    # stdout/stderr captured separately as safety net (panic logs, early startup errors)
+    LOG_FILE="$LOG_DIR/server-$(date +%Y-%m-%d).log"
+    STDOUT_FILE="$LOG_DIR/stdout-$(date +%Y-%m-%d).log"
+
     echo -e "${GREEN}Starting $BINARY_NAME...${NC}"
-    echo "Logs will be saved to: $LOG_FILE"
-    
-    # Run in background with nohup and redirect output to daily log
-    nohup ./"$BINARY_NAME" >> "$LOG_FILE" 2>&1 &
+    echo "Application logs: $LOG_FILE"
+    echo "stdout fallback:  $STDOUT_FILE"
+
+    # Redirect stdout/stderr to a separate fallback file
+    # (Go binary writes its own rotating logs — this is a catch-all)
+    nohup ./"$BINARY_NAME" >> "$STDOUT_FILE" 2>&1 &
     
     # Save PID
     echo $! > "$PID_FILE"
@@ -87,7 +92,8 @@ stop() {
 status() {
     if is_running; then
         echo -e "${GREEN}Service is running (PID: $(get_pid))${NC}"
-        echo "Current log file: $LOG_DIR/$(date +%Y-%m-%d).log"
+        echo "Application log: $LOG_DIR/server-$(date +%Y-%m-%d).log"
+        echo "stdout fallback: $LOG_DIR/stdout-$(date +%Y-%m-%d).log"
     else
         echo -e "${RED}Service is not running${NC}"
     fi
