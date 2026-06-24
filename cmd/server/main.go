@@ -191,7 +191,7 @@ func main() {
 
 	// --- Handlers ---
 	agentHandler := handlers.NewAgentHandler(repo, alertManager)
-	frontendHandler := handlers.NewFrontendHandler(repo, registry, cfg.JWTSecret)
+	frontendHandler := handlers.NewFrontendHandler(repo, registry, cfg.JWTSecret, cfg.CaptchaSecret)
 	wsHandler := handlers.NewWSHandler(registry, repo, alertManager)
 	settingHandler := handlers.NewSettingHandler(repo)
 	scheduleHandler := handlers.NewScheduleHandler(repo, sched)
@@ -217,6 +217,9 @@ func main() {
 
 	// Frontend auth (with strict login rate limit)
 	r.POST("/api/v1/auth/login", middleware.LoginRateLimiter(), frontendHandler.Login)
+
+	// CAPTCHA endpoints (no auth required)
+	r.GET("/api/v1/auth/captcha/challenge", frontendHandler.GetCaptchaChallenge)
 
 	// Frontend endpoints (JWT-protected)
 	protectedGroup := r.Group("/api/v1", middleware.JWTAuth(cfg.JWTSecret))

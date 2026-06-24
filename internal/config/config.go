@@ -20,9 +20,12 @@ type Config struct {
 
 	DBMongoURI string
 
-	BotToken  string
-	JWTSecret string
-	Port      string
+	BotToken           string
+	JWTSecret          string
+	Port               string
+	CaptchaProvider    string
+	CaptchaSecret      string
+	TurnstileSecretKey string
 }
 
 // LoadConfig loads configuration from a .env file (if present) and
@@ -45,10 +48,22 @@ func LoadConfig() *Config {
 		BotToken:  getEnv("BOT_TOKEN", ""),
 		JWTSecret: getEnv("JWT_SECRET", ""),
 		Port:      getEnv("PORT", "8080"),
+
+		CaptchaProvider:    getEnv("CAPTCHA_PROVIDER", "local"),
+		CaptchaSecret:      getEnv("CAPTCHA_SECRET", ""),
+		TurnstileSecretKey: getEnv("TURNSTILE_SECRET_KEY", ""),
 	}
 
 	if cfg.JWTSecret == "" {
 		log.Fatal("JWT_SECRET must be set")
+	}
+
+	// Validate CAPTCHA config
+	if cfg.CaptchaProvider == "local" && cfg.CaptchaSecret == "" {
+		log.Fatal("CAPTCHA_SECRET must be set when CAPTCHA_PROVIDER=local")
+	}
+	if cfg.CaptchaProvider == "turnstile" && cfg.TurnstileSecretKey == "" {
+		log.Fatal("TURNSTILE_SECRET_KEY must be set when CAPTCHA_PROVIDER=turnstile")
 	}
 
 	return cfg

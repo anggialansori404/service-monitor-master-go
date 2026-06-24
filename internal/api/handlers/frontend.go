@@ -22,20 +22,22 @@ import (
 )
 
 type FrontendHandler struct {
-	Repo        repository.Repository
-	Registry    *ws.Registry
-	JWTSecret   string
+	Repo          repository.Repository
+	Registry      *ws.Registry
+	JWTSecret     string
+	CaptchaSecret string
 }
 
 // NewFrontendHandler creates a new FrontendHandler.
-func NewFrontendHandler(repo repository.Repository, registry *ws.Registry, jwtSecret string) *FrontendHandler {
-	return &FrontendHandler{Repo: repo, Registry: registry, JWTSecret: jwtSecret}
+func NewFrontendHandler(repo repository.Repository, registry *ws.Registry, jwtSecret, captchaSecret string) *FrontendHandler {
+	return &FrontendHandler{Repo: repo, Registry: registry, JWTSecret: jwtSecret, CaptchaSecret: captchaSecret}
 }
 
 // loginRequest is the expected payload for POST /auth/login.
 type loginRequest struct {
 	Email    string `json:"email" binding:"required"`
 	Password string `json:"password" binding:"required"`
+	CfToken  string `json:"cf_token"`
 }
 
 // Login handles POST /auth/login.
@@ -45,6 +47,44 @@ func (h *FrontendHandler) Login(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// --- CAPTCHA validation ---
+	captchaProvider := os.Getenv("CAPTCHA_PROVIDER")
+	if captchaProvider == "" {
+		captchaProvider = "local"
+	}
+
+	switch captchaProvider {
+	case "local":
+		if req.CfToken == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cf_token is required"})
+			return
+		}
+		claims, err := verifyLocalCaptchaToken(req.CfToken, h.CaptchaSecret)
+		if err != nil {
+			log.Printf("CAPTCHA FAILED (local): %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired captcha token"})
+			return
+		}
+		// Token valid, we don't need the answer — it was pre-verified client-side
+		_ = claims
+
+	case "turnstile":
+		if req.CfToken == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cf_token is required"})
+			return
+		}
+		secretKey := os.Getenv("TURNSTILE_SECRET_KEY")
+		ok, err := verifyTurnstileToken(req.CfToken, secretKey)
+		if err != nil || !ok {
+			log.Printf("CAPTCHA FAILED (turnstile): ok=%v err=%v", ok, err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "turnstile verification failed"})
+			return
+		}
+
+	case "none":
+		// No CAPTCHA — rate limiter already protects this route
 	}
 
 	user, err := h.Repo.GetUserByEmail(req.Email)
