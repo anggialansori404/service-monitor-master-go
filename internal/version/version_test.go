@@ -49,7 +49,7 @@ func TestLogStartupBanner(t *testing.T) {
 	log.SetOutput(&buf)
 	log.SetFlags(0)
 
-	LogStartupBanner("8080", "mongo", "release")
+	LogStartupBanner("8080", "mongo", "release", false)
 
 	output := buf.String()
 	if !strings.Contains(output, "Service Monitor Master") {
@@ -63,6 +63,9 @@ func TestLogStartupBanner(t *testing.T) {
 	}
 	if !strings.Contains(output, "release") {
 		t.Errorf("expected banner output to contain ginMode 'release', got:\n%s", output)
+	}
+	if !strings.Contains(output, "Debug Log") {
+		t.Errorf("expected banner output to contain 'Debug Log', got:\n%s", output)
 	}
 	if !strings.Contains(output, os.Getenv("PID")) && !strings.Contains(output, "Process PID") {
 		t.Errorf("expected banner output to contain Process PID, got:\n%s", output)

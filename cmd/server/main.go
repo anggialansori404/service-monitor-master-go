@@ -64,8 +64,11 @@ func main() {
 	}
 	gin.SetMode(cfg.GinMode)
 
+	// --- Configure Debug Logging ---
+	logutil.SetDebug(cfg.DebugLog)
+
 	// --- Log Application Startup Banner & Versioning ---
-	version.LogStartupBanner(cfg.Port, cfg.DBDriver, cfg.GinMode)
+	version.LogStartupBanner(cfg.Port, cfg.DBDriver, cfg.GinMode, cfg.DebugLog)
 
 	// --- Database ---
 	var repo repository.Repository

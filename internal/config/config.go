@@ -24,6 +24,7 @@ type Config struct {
 	JWTSecret          string
 	Port               string
 	GinMode            string
+	DebugLog           bool
 	CaptchaProvider    string
 	CaptchaSecret      string
 	TurnstileSecretKey string
@@ -50,6 +51,7 @@ func LoadConfig() *Config {
 		JWTSecret: getEnv("JWT_SECRET", ""),
 		Port:      getEnv("PORT", "8080"),
 		GinMode:   getEnv("GIN_MODE", "release"),
+		DebugLog:  getEnvAsBool("DEBUG_LOG", false) || getEnvAsBool("DEBUG", false) || getEnvAsBool("ENABLE_DEBUG_LOG", false),
 
 		CaptchaProvider:    getEnv("CAPTCHA_PROVIDER", "local"),
 		CaptchaSecret:      getEnv("CAPTCHA_SECRET", ""),
@@ -76,6 +78,19 @@ func LoadConfig() *Config {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+// getEnvAsBool parses an environment variable as a boolean.
+func getEnvAsBool(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		switch v {
+		case "true", "1", "yes", "TRUE", "True", "on", "ON":
+			return true
+		case "false", "0", "no", "FALSE", "False", "off", "OFF":
+			return false
+		}
 	}
 	return fallback
 }

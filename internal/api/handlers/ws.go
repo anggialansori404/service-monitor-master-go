@@ -9,11 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"monitoring-master/internal/alert"
+	"monitoring-master/internal/logutil"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 	"monitoring-master/internal/services"
 	"monitoring-master/internal/ws"
-	"monitoring-master/internal/alert"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -152,7 +153,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 		}
 
 		if action != "sync" {
-			log.Printf("DEBUG WS MSG from agent %s: %+v", agentID, msgData)
+			logutil.Debugf("WS MSG from agent %s: %+v", agentID, msgData)
 		}
 
 		// Phase 3 & 4: Seamless WS Streaming for Sync and Alert

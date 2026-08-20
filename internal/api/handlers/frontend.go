@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"monitoring-master/internal/logutil"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 	"monitoring-master/internal/ws"
@@ -336,7 +337,7 @@ func (h *FrontendHandler) RestartService(c *gin.Context) {
 	userEmail := c.GetString("userEmail") // Sesuai dengan c.Set di Middleware
 
 	// 2. LOG HASIL GET
-	log.Printf("DEBUG RESTART CONTROLLER: Extracted email from context='%s'", userEmail)
+	logutil.Debugf("RESTART CONTROLLER: Extracted email from context='%s'", userEmail)
 
 	if userEmail == "" {
 		if uidStr, exists := c.Get("userID"); exists {

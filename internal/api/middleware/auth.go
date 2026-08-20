@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"monitoring-master/internal/logutil"
 	"monitoring-master/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -31,42 +32,27 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 
 		institution, err := repo.GetInstitutionByAgentID(c.Request.Context(), agentID)
 		if err != nil {
-			if err == repository.ErrNotFound {
-				log.Printf("MONGODB AUTH FAILED: Agent not found (AgentID: %s)", agentID)
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"error": "invalid agent credentials",
-				})
-				return
-			}
-
-			// Cek jika error adalah karena salah tipe data (seperti ObjectID vs Integer)
-			if strings.Contains(err.Error(), "cannot decode") {
-				log.Printf("MONGODB DATA CORRUPT: %v. Please delete the document in DB and recreate it.", err)
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"error": "institution data is corrupted in DB (ID type mismatch)",
-				})
-				return
-			}
-
-			log.Printf("MONGODB ERROR IN MIDDLEWARE (FindOne): %v", err)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error": "database error in auth middleware",
+			log.Printf("MONGODB AUTH FAILED: agent not found for AgentID: %s (err: %v)", agentID, err)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid agent credentials",
 			})
 			return
 		}
 
-		// Support both plaintext matching and legacy bcrypt matching
-		storedSecret := strings.TrimSpace(institution.SecretKey)
+		// Fallback check:
+		// 1. First try constant-time string comparison (for plain text / direct matching)
+		// 2. If fails, try bcrypt comparison (in case secret_key in DB was hashed)
+		matched := false
+		storedSecret := institution.SecretKey
 		trimmedSecret := strings.TrimSpace(secretKey)
 
-		// 1. Try exact string match (ConstantTimeCompare)
-		matched := false
-		if len(storedSecret) == len(trimmedSecret) && subtle.ConstantTimeCompare([]byte(storedSecret), []byte(trimmedSecret)) == 1 {
+		// Exact match check (prevents subtle length mismatch issues)
+		if storedSecret == trimmedSecret {
 			matched = true
-		}
-
-		// 2. If not exact match, try bcrypt (in case DB stores a bcrypt hash)
-		if !matched {
+		} else if subtle.ConstantTimeCompare([]byte(storedSecret), []byte(trimmedSecret)) == 1 {
+			matched = true
+		} else if strings.HasPrefix(storedSecret, "$2a$") || strings.HasPrefix(storedSecret, "$2b$") || strings.HasPrefix(storedSecret, "$2y$") {
+			// Try bcrypt check if stored key looks like a hash
 			if err := bcrypt.CompareHashAndPassword([]byte(storedSecret), []byte(trimmedSecret)); err == nil {
 				matched = true
 			}
@@ -79,7 +65,7 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 			})
 			return
 		}
-		log.Printf("DEBUG AUTH: Agent=%s, DB_IsActive=%v", institution.AgentID, institution.IsActive)
+		logutil.Debugf("AUTH: Agent=%s, DB_IsActive=%v", institution.AgentID, institution.IsActive)
 
 		if !institution.IsActive {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
@@ -141,8 +127,8 @@ func JWTAuth(secret string) gin.HandlerFunc {
 		userID, _ := claims["sub"].(string)
 		email, _ := claims["email"].(string)
 
-		// 1. Log isi claims asli dari JWT
-		log.Printf("DEBUG JWT CLAIMS: %+v", claims)
+		// 1. Log isi claims asli dari JWT (hanya jika debug log aktif)
+		logutil.Debugf("JWT CLAIMS: %+v", claims)
 
 		// 2. Ekstrak Email secara aman dan log warning jika kosong
 		if email == "" {
@@ -150,7 +136,7 @@ func JWTAuth(secret string) gin.HandlerFunc {
 		}
 
 		// 3. SET ke Gin Context
-		log.Printf("DEBUG MIDDLEWARE SET: email='%s'", email)
+		logutil.Debugf("MIDDLEWARE SET: email='%s'", email)
 		c.Set("UserRole", role)
 		c.Set("userID", userID)
 		c.Set("userEmail", email)

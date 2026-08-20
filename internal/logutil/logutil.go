@@ -96,3 +96,37 @@ func Setup(logDir string) (*DailyRotatingWriter, error) {
 
 	return writer, nil
 }
+
+var (
+	debugEnabled bool
+	debugMu      sync.RWMutex
+)
+
+// SetDebug enables or disables verbose debug logging.
+func SetDebug(enabled bool) {
+	debugMu.Lock()
+	defer debugMu.Unlock()
+	debugEnabled = enabled
+}
+
+// IsDebug returns true if debug logging is enabled.
+func IsDebug() bool {
+	debugMu.RLock()
+	defer debugMu.RUnlock()
+	return debugEnabled
+}
+
+// Debugf logs formatted debug messages only when debug logging is enabled.
+// Uses log.Output(2, ...) to preserve the actual caller file and line number.
+func Debugf(format string, v ...interface{}) {
+	if IsDebug() {
+		_ = log.Output(2, fmt.Sprintf("DEBUG "+format, v...))
+	}
+}
+
+// Debugln logs debug messages only when debug logging is enabled.
+func Debugln(v ...interface{}) {
+	if IsDebug() {
+		_ = log.Output(2, "DEBUG "+fmt.Sprint(v...))
+	}
+}

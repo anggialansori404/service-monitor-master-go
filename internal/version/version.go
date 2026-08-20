@@ -80,7 +80,7 @@ func Get() Info {
 }
 
 // LogStartupBanner prints a clean, formatted startup header to standard logs
-func LogStartupBanner(port, dbDriver, ginMode string) {
+func LogStartupBanner(port, dbDriver, ginMode string, debugLog bool) {
 	info := Get()
 	border := strings.Repeat("=", 60)
 
@@ -93,6 +93,7 @@ func LogStartupBanner(port, dbDriver, ginMode string) {
 	log.Printf(" - Database    : %s", dbDriver)
 	log.Printf(" - Server Port : :%s", port)
 	log.Printf(" - Gin Mode    : %s", ginMode)
+	log.Printf(" - Debug Log   : %v", debugLog)
 	if info.GitCommit != "" {
 		log.Printf(" - Git Commit  : %s", info.GitCommit)
 	}
