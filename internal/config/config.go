@@ -23,6 +23,7 @@ type Config struct {
 	BotToken           string
 	JWTSecret          string
 	Port               string
+	GinMode            string
 	CaptchaProvider    string
 	CaptchaSecret      string
 	TurnstileSecretKey string
@@ -48,6 +49,7 @@ func LoadConfig() *Config {
 		BotToken:  getEnv("BOT_TOKEN", ""),
 		JWTSecret: getEnv("JWT_SECRET", ""),
 		Port:      getEnv("PORT", "8080"),
+		GinMode:   getEnv("GIN_MODE", "release"),
 
 		CaptchaProvider:    getEnv("CAPTCHA_PROVIDER", "local"),
 		CaptchaSecret:      getEnv("CAPTCHA_SECRET", ""),

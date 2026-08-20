@@ -69,8 +69,17 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 		return
 	}
 
+	// Configure Heartbeat and payload limits
+	conn.SetReadLimit(ws.MaxMessageSize)
+	_ = conn.SetReadDeadline(time.Now().Add(ws.PongWait))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(ws.PongWait))
+		return nil
+	})
+
 	client := ws.NewClient(agentID, conn)
 	h.Registry.Register(client)
+	go client.StartWritePump()
 	log.Printf("agent connected: %s (institution: %s)", agentID, institution.Name)
 
 	// On reconnect, edit ALL previous "disconnected" Telegram messages to "recovered"
@@ -112,13 +121,20 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	for {
 		_, rawMsg, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("WS read error for agent %s: %v", agentID, err)
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WS unexpected close for agent %s: %v", agentID, err)
+			} else {
+				log.Printf("WS read error/timeout for agent %s: %v", agentID, err)
+			}
 			break
 		}
 
+		// Reset read deadline on receiving incoming message
+		_ = conn.SetReadDeadline(time.Now().Add(ws.PongWait))
+
 		var msgData map[string]interface{}
 		if err := json.Unmarshal(rawMsg, &msgData); err != nil {
-			log.Printf("WS Unmarshal error for agent %s: %v", agentID, err)
+			log.Printf("WS Unmarshal error for agent %s: %v (raw payload size: %d bytes)", agentID, err, len(rawMsg))
 			continue
 		}
 

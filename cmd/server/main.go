@@ -21,6 +21,7 @@ import (
 	"monitoring-master/internal/repository"
 	"monitoring-master/internal/alert"
 	"monitoring-master/internal/scheduler"
+	"monitoring-master/internal/version"
 	"monitoring-master/internal/ws"
 
 	"github.com/gin-contrib/cors"
@@ -56,6 +57,15 @@ func main() {
 
 	// --- Configuration ---
 	cfg := config.LoadConfig()
+
+	// --- Set Gin Mode (Default: release) ---
+	if cfg.GinMode == "" {
+		cfg.GinMode = "release"
+	}
+	gin.SetMode(cfg.GinMode)
+
+	// --- Log Application Startup Banner & Versioning ---
+	version.LogStartupBanner(cfg.Port, cfg.DBDriver, cfg.GinMode)
 
 	// --- Database ---
 	var repo repository.Repository
