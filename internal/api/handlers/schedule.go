@@ -98,11 +98,12 @@ func (h *ScheduleHandler) CreateSchedule(c *gin.Context) {
 	if tz == "" {
 		tz = "Asia/Jakarta"
 	}
-	_, err = time.LoadLocation(tz)
+	loc, err := scheduler.ParseLocation(tz)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid timezone: " + tz})
 		return
 	}
+	tz = loc.String()
 
 	// Validate missed_policy.
 	missedPolicy := req.MissedPolicy
@@ -251,12 +252,12 @@ func (h *ScheduleHandler) UpdateSchedule(c *gin.Context) {
 	}
 
 	if req.Timezone != nil {
-		_, err := time.LoadLocation(*req.Timezone)
+		loc, err := scheduler.ParseLocation(*req.Timezone)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid timezone: " + *req.Timezone})
 			return
 		}
-		existing.Timezone = *req.Timezone
+		existing.Timezone = loc.String()
 		changed = true
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,26 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/google/uuid"
 )
+
+// ParseLocation loads a time.Location supporting standard IANA names and Indonesian timezone aliases (WIB, WITA, WIT).
+func ParseLocation(tz string) (*time.Location, error) {
+	cleanTz := strings.TrimSpace(tz)
+	switch strings.ToUpper(cleanTz) {
+	case "WIB", "ASIA/JAKARTA":
+		return time.LoadLocation("Asia/Jakarta")
+	case "WITA", "ASIA/MAKASSAR":
+		return time.LoadLocation("Asia/Makassar")
+	case "WIT", "ASIA/JAYAPURA":
+		return time.LoadLocation("Asia/Jayapura")
+	case "UTC", "GMT":
+		return time.UTC, nil
+	default:
+		if cleanTz == "" {
+			return time.LoadLocation("Asia/Jakarta")
+		}
+		return time.LoadLocation(cleanTz)
+	}
+}
 
 // ServiceScheduler manages scheduled restarts via gocron v2.
 type ServiceScheduler struct {
@@ -86,7 +107,7 @@ func (s *ServiceScheduler) LoadSchedules() error {
 // The job uses the schedule's cron expression and timezone, with singleton mode
 // to prevent overlapping runs.
 func (s *ServiceScheduler) AddSchedule(schedule *models.Schedule) error {
-	loc, err := time.LoadLocation(schedule.Timezone)
+	loc, err := ParseLocation(schedule.Timezone)
 	if err != nil {
 		return fmt.Errorf("invalid timezone %q: %w", schedule.Timezone, err)
 	}
@@ -118,7 +139,9 @@ func (s *ServiceScheduler) AddSchedule(schedule *models.Schedule) error {
 	if nextRun.IsZero() {
 		log.Printf("scheduler: registered job for schedule %s (%s)", schedule.ID, schedule.Name)
 	} else {
-		log.Printf("scheduler: registered job for schedule %s (%s), next run: %s", schedule.ID, schedule.Name, nextRun.Format("2006-01-02 15:04:05 MST"))
+		nextRunInLoc := nextRun.In(loc)
+		log.Printf("scheduler: registered job for schedule %s (%s), next run: %s (%s)",
+			schedule.ID, schedule.Name, nextRunInLoc.Format("2006-01-02 15:04:05 MST"), loc.String())
 	}
 	return nil
 }
@@ -165,7 +188,7 @@ func (s *ServiceScheduler) executeSchedule(schedule *models.Schedule) {
 
 	// Check missed policy.
 	if schedule.MissedPolicy == "catch_up_once" && schedule.LastRunAt != nil {
-		loc, err := time.LoadLocation(schedule.Timezone)
+		loc, err := ParseLocation(schedule.Timezone)
 		if err != nil {
 			loc = time.UTC
 		}

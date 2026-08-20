@@ -313,7 +313,8 @@ func TestSchedulerDeletedSchedule(t *testing.T) {
 
 func TestNextRunCalculation(t *testing.T) {
 	repo := newMockRepo()
-	seedSchedule(repo, "sched-test", "Midnight Test", "0 0 * * *", true)
+	s := seedSchedule(repo, "sched-test", "2 AM WITA Test", "0 2 * * *", true)
+	s.Timezone = "WITA" // test abbreviation alias
 
 	sched, err := New(repo, nil)
 	if err != nil {
@@ -330,10 +331,42 @@ func TestNextRunCalculation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NextRun error: %v", err)
 	}
-	if nextRun.IsZero() {
-		t.Errorf("expected non-zero nextRun right after New(), got %v", nextRun)
+
+	loc, err := ParseLocation("WITA")
+	if err != nil {
+		t.Fatalf("ParseLocation(WITA) failed: %v", err)
 	}
-	if nextRun.Year() < 2026 {
-		t.Errorf("expected valid future year (>= 2026), got %v", nextRun)
+
+	nextInLoc := nextRun.In(loc)
+	if nextInLoc.Hour() != 2 || nextInLoc.Minute() != 0 {
+		t.Errorf("expected next run to be at 02:00 in WITA, got %s", nextInLoc.Format("15:04:05 MST"))
+	}
+}
+
+func TestParseLocationAliases(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"WIB", "Asia/Jakarta"},
+		{"Asia/Jakarta", "Asia/Jakarta"},
+		{"WITA", "Asia/Makassar"},
+		{"Asia/Makassar", "Asia/Makassar"},
+		{"WIT", "Asia/Jayapura"},
+		{"Asia/Jayapura", "Asia/Jayapura"},
+		{"UTC", "UTC"},
+		{"GMT", "UTC"},
+		{"", "Asia/Jakarta"},
+	}
+
+	for _, tc := range cases {
+		loc, err := ParseLocation(tc.input)
+		if err != nil {
+			t.Errorf("ParseLocation(%q) returned error: %v", tc.input, err)
+			continue
+		}
+		if loc.String() != tc.expected {
+			t.Errorf("ParseLocation(%q) = %s, expected %s", tc.input, loc.String(), tc.expected)
+		}
 	}
 }
