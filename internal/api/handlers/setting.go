@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"monitoring-master/internal/cleanup"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 
@@ -219,3 +220,43 @@ func sendTestMessage(token, chatID, topicID string) error {
 
 	return nil
 }
+
+type PurgeLogsRequest struct {
+	LogType string `json:"log_type"` // "audit", "security", "schedule_run", "all"
+	Days    int    `json:"days"`     // 0 = all, >0 = older than N days
+}
+
+// PurgeLogs manually deletes log records matching criteria.
+func (h *SettingHandler) PurgeLogs(c *gin.Context) {
+	var input PurgeLogsRequest
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	if input.LogType == "" {
+		input.LogType = "all"
+	}
+	if input.LogType != "audit" && input.LogType != "security" && input.LogType != "schedule_run" && input.LogType != "all" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid log_type. Must be audit, security, schedule_run, or all"})
+		return
+	}
+
+	res, err := cleanup.ExecutePurge(c.Request.Context(), h.Repo, cleanup.PurgeOptions{
+		LogType: input.LogType,
+		Days:    input.Days,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to purge logs: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":               "Logs successfully purged",
+		"deleted_audit":         res.DeletedAudit,
+		"deleted_security":      res.DeletedSecurity,
+		"deleted_schedule_runs": res.DeletedScheduleRuns,
+		"total_deleted":         res.TotalDeleted,
+	})
+}
+

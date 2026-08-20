@@ -22,6 +22,7 @@ type ScheduleRepository interface {
 	ListScheduleRuns(ctx context.Context, scheduleID string, page, limit int) ([]models.ScheduleRun, int64, error)
 	GetEnabledSchedules(ctx context.Context) ([]models.Schedule, error)
 	UpdateScheduleRunTimes(ctx context.Context, scheduleID string, lastRunAt, nextRunAt time.Time) error
+	PurgeScheduleRuns(ctx context.Context, olderThan time.Time) (int64, error)
 }
 
 // Repository abstracts all database operations used by handlers, bot, middleware, and seeder.
@@ -54,8 +55,10 @@ type Repository interface {
 
 	// AuditLog
 	CreateAuditLog(ctx context.Context, log *models.AuditLog) error
+	PurgeAuditLogs(ctx context.Context, olderThan time.Time) (int64, error)
 	// SecurityLog
 	CreateSecurityLog(ctx context.Context, log *models.SecurityLog) error
+	PurgeSecurityLogs(ctx context.Context, olderThan time.Time) (int64, error)
 
 	// Auth
 	GetInstitutionByAgentIDAndSecret(ctx context.Context, agentID, secretKey string) (*models.Institution, error)
@@ -79,4 +82,5 @@ type Repository interface {
 
 	// Schedule
 	ScheduleRepo() ScheduleRepository
+	PurgeScheduleRuns(ctx context.Context, olderThan time.Time) (int64, error)
 }

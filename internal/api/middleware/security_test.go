@@ -111,6 +111,9 @@ func (f *fullMockRepo) GetAuditLogsAll(_ context.Context, _ map[string]interface
 func (f *fullMockRepo) GetSecurityLogs(_ context.Context, _, _ int) ([]models.SecurityLog, int64, error) {
 	return nil, 0, nil
 }
+func (f *fullMockRepo) PurgeAuditLogs(_ context.Context, _ time.Time) (int64, error)   { return 0, nil }
+func (f *fullMockRepo) PurgeSecurityLogs(_ context.Context, _ time.Time) (int64, error) { return 0, nil }
+func (f *fullMockRepo) PurgeScheduleRuns(_ context.Context, _ time.Time) (int64, error) { return 0, nil }
 func (f *fullMockRepo) GetSettings(_ context.Context) (*models.GlobalSetting, error)  { return nil, nil }
 func (f *fullMockRepo) UpdateSettings(_ context.Context, _ *models.GlobalSetting) error { return nil }
 func (f *fullMockRepo) ScheduleRepo() repository.ScheduleRepository                  { return nil }

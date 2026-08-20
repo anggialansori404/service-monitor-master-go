@@ -642,6 +642,22 @@ func (r *MongoRepository) CreateAuditLog(ctx context.Context, log *models.AuditL
 	_, err := coll.InsertOne(ctx, log)
 	return err
 }
+
+func (r *MongoRepository) PurgeAuditLogs(ctx context.Context, olderThan time.Time) (int64, error) {
+	coll := r.db.Collection("audit_logs")
+	filter := bson.M{
+		"$or": []bson.M{
+			{"created_at": bson.M{"$lt": olderThan}},
+			{"timestamp": bson.M{"$lt": olderThan}},
+		},
+	}
+	res, err := coll.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
 // --- SecurityLog ---
 
 func (r *MongoRepository) CreateSecurityLog(ctx context.Context, log *models.SecurityLog) error {
@@ -651,6 +667,16 @@ func (r *MongoRepository) CreateSecurityLog(ctx context.Context, log *models.Sec
 	}
 	_, err := coll.InsertOne(ctx, log)
 	return err
+}
+
+func (r *MongoRepository) PurgeSecurityLogs(ctx context.Context, olderThan time.Time) (int64, error) {
+	coll := r.db.Collection("security_logs")
+	filter := bson.M{"timestamp": bson.M{"$lt": olderThan}}
+	res, err := coll.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
 }
 
 // --- Auth ---
@@ -1298,4 +1324,19 @@ func (r *MongoRepository) UpdateScheduleRunTimes(ctx context.Context, scheduleID
 	update := bson.M{"$set": setFields}
 	_, err := coll.UpdateOne(ctx, filter, update)
 	return err
+}
+
+func (r *MongoRepository) PurgeScheduleRuns(ctx context.Context, olderThan time.Time) (int64, error) {
+	coll := r.db.Collection("schedule_runs")
+	filter := bson.M{
+		"$or": []bson.M{
+			{"created_at": bson.M{"$lt": olderThan}},
+			{"run_at": bson.M{"$lt": olderThan}},
+		},
+	}
+	res, err := coll.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
 }

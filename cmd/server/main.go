@@ -11,15 +11,16 @@ import (
 	"syscall"
 	"time"
 
+	"monitoring-master/internal/alert"
 	"monitoring-master/internal/api/handlers"
 	"monitoring-master/internal/api/middleware"
 	"monitoring-master/internal/bot"
+	"monitoring-master/internal/cleanup"
 	"monitoring-master/internal/config"
 	"monitoring-master/internal/database"
 	"monitoring-master/internal/logutil"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
-	"monitoring-master/internal/alert"
 	"monitoring-master/internal/scheduler"
 	"monitoring-master/internal/version"
 	"monitoring-master/internal/ws"
@@ -218,6 +219,9 @@ func main() {
 		log.Fatalf("scheduler init: %v", err)
 	}
 
+	// --- Log Retention Daily Cleanup Worker ---
+	cleanup.StartDailyCleanup(repo, cfg)
+
 	// --- Handlers ---
 	agentHandler := handlers.NewAgentHandler(repo, alertManager)
 	frontendHandler := handlers.NewFrontendHandler(repo, registry, cfg.JWTSecret, cfg.CaptchaSecret)
@@ -262,6 +266,7 @@ func main() {
 		protectedGroup.POST("/settings", settingHandler.UpdateSettings)
 		protectedGroup.POST("/settings/test-alert", settingHandler.TestAlert)
 		protectedGroup.GET("/security-logs", settingHandler.GetSecurityLogs)
+		protectedGroup.POST("/settings/purge-logs", settingHandler.PurgeLogs)
 	}
 
 	institutionsGroup := r.Group("/api/v1/institutions", middleware.JWTAuth(cfg.JWTSecret))

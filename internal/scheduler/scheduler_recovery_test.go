@@ -114,6 +114,10 @@ func (m *mockScheduleRepo) UpdateScheduleRunTimes(_ context.Context, _ string, _
 	return nil
 }
 
+func (m *mockScheduleRepo) PurgeScheduleRuns(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+
 // --- Mock Repository ---
 
 type mockRepo struct {
@@ -194,6 +198,9 @@ func (m *mockRepo) UpdateSettings(_ context.Context, _ *models.GlobalSetting) er
 func (m *mockRepo) BlacklistIP(_ context.Context, _ string, _ string) error       { return nil }
 func (m *mockRepo) IsIPBlacklisted(_ context.Context, _ string) (bool, error)     { return false, nil }
 func (m *mockRepo) GetBlacklistedIPs(_ context.Context) ([]string, error)          { return []string{}, nil }
+func (m *mockRepo) PurgeAuditLogs(_ context.Context, _ time.Time) (int64, error)   { return 0, nil }
+func (m *mockRepo) PurgeSecurityLogs(_ context.Context, _ time.Time) (int64, error) { return 0, nil }
+func (m *mockRepo) PurgeScheduleRuns(_ context.Context, _ time.Time) (int64, error) { return 0, nil }
 
 // --- Helpers ---
 

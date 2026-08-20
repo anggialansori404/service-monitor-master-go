@@ -372,6 +372,12 @@ func (r *SQLRepository) CreateAuditLog(ctx context.Context, log *models.AuditLog
 	}
 	return r.db.WithContext(ctx).Create(log).Error
 }
+
+func (r *SQLRepository) PurgeAuditLogs(ctx context.Context, olderThan time.Time) (int64, error) {
+	db := r.db.WithContext(ctx).Where("created_at < ? OR timestamp < ?", olderThan, olderThan).Delete(&models.AuditLog{})
+	return db.RowsAffected, db.Error
+}
+
 // --- SecurityLog ---
 
 func (r *SQLRepository) CreateSecurityLog(ctx context.Context, log *models.SecurityLog) error {
@@ -379,6 +385,11 @@ func (r *SQLRepository) CreateSecurityLog(ctx context.Context, log *models.Secur
 		log.ID = generateID()
 	}
 	return r.db.WithContext(ctx).Create(log).Error
+}
+
+func (r *SQLRepository) PurgeSecurityLogs(ctx context.Context, olderThan time.Time) (int64, error) {
+	db := r.db.WithContext(ctx).Where("timestamp < ?", olderThan).Delete(&models.SecurityLog{})
+	return db.RowsAffected, db.Error
 }
 
 // --- Auth ---
@@ -734,4 +745,9 @@ func (r *SQLRepository) UpdateScheduleRunTimes(ctx context.Context, scheduleID s
 		return nil
 	}
 	return r.db.WithContext(ctx).Model(&models.Schedule{}).Where("id = ?", scheduleID).Updates(updates).Error
+}
+
+func (r *SQLRepository) PurgeScheduleRuns(ctx context.Context, olderThan time.Time) (int64, error) {
+	db := r.db.WithContext(ctx).Where("created_at < ? OR run_at < ?", olderThan, olderThan).Delete(&models.ScheduleRun{})
+	return db.RowsAffected, db.Error
 }

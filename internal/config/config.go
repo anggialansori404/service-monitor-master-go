@@ -28,6 +28,10 @@ type Config struct {
 	CaptchaProvider    string
 	CaptchaSecret      string
 	TurnstileSecretKey string
+
+	AuditLogRetentionDays    int
+	SecurityLogRetentionDays  int
+	ScheduleRunRetentionDays int
 }
 
 // LoadConfig loads configuration from a .env file (if present) and
@@ -56,6 +60,10 @@ func LoadConfig() *Config {
 		CaptchaProvider:    getEnv("CAPTCHA_PROVIDER", "local"),
 		CaptchaSecret:      getEnv("CAPTCHA_SECRET", ""),
 		TurnstileSecretKey: getEnv("TURNSTILE_SECRET_KEY", ""),
+
+		AuditLogRetentionDays:    getEnvAsInt("AUDIT_LOG_RETENTION_DAYS", 30),
+		SecurityLogRetentionDays:  getEnvAsInt("SECURITY_LOG_RETENTION_DAYS", 30),
+		ScheduleRunRetentionDays: getEnvAsInt("SCHEDULE_RUN_RETENTION_DAYS", 30),
 	}
 
 	if cfg.JWTSecret == "" {
@@ -90,6 +98,17 @@ func getEnvAsBool(key string, fallback bool) bool {
 			return true
 		case "false", "0", "no", "FALSE", "False", "off", "OFF":
 			return false
+		}
+	}
+	return fallback
+}
+
+// getEnvAsInt parses an environment variable as an integer.
+func getEnvAsInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		var val int
+		if _, err := fmt.Sscanf(v, "%d", &val); err == nil {
+			return val
 		}
 	}
 	return fallback
