@@ -15,7 +15,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// SecurityHeadersMiddleware adds standard security headers to every response.
+// SecurityHeaders adds standard security headers to every response.
 func SecurityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-XSS-Protection", "1; mode=block")
@@ -96,8 +96,100 @@ func LoginRateLimiter() gin.HandlerFunc {
 		c.Next()
 	}
 }
-// IPBlacklist checks if the client IP is in the blacklist.
-func IPBlacklist(repo repository.Repository) gin.HandlerFunc {
+
+// BlacklistManager manages in-memory caching of blacklisted IPs with periodic DB sync.
+type BlacklistManager struct {
+	repo   repository.Repository
+	mu     sync.RWMutex
+	ips    map[string]struct{}
+	stopCh chan struct{}
+}
+
+// NewBlacklistManager initializes the BlacklistManager, loads all blacklisted IPs into memory,
+// and starts a background periodic synchronization routine.
+func NewBlacklistManager(repo repository.Repository) *BlacklistManager {
+	bm := &BlacklistManager{
+		repo:   repo,
+		ips:    make(map[string]struct{}),
+		stopCh: make(chan struct{}),
+	}
+	bm.LoadFromDB()
+	go bm.startPeriodicSync(5 * time.Minute)
+	return bm
+}
+
+// LoadFromDB fetches all blacklisted IPs from database and refreshes memory cache.
+func (bm *BlacklistManager) LoadFromDB() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ips, err := bm.repo.GetBlacklistedIPs(ctx)
+	if err != nil {
+		log.Printf("[SECURITY WARNING] Failed to load blacklisted IPs from DB: %v", err)
+		return
+	}
+
+	bm.mu.Lock()
+	newMap := make(map[string]struct{}, len(ips))
+	for _, ip := range ips {
+		newMap[ip] = struct{}{}
+	}
+	bm.ips = newMap
+	count := len(bm.ips)
+	bm.mu.Unlock()
+
+	log.Printf("[SECURITY] Loaded %d blacklisted IPs into in-memory cache", count)
+}
+
+// IsBlacklisted performs an O(1) in-memory lookup to check if an IP is banned.
+func (bm *BlacklistManager) IsBlacklisted(ip string) bool {
+	bm.mu.RLock()
+	_, found := bm.ips[ip]
+	bm.mu.RUnlock()
+	return found
+}
+
+// Blacklist immediately marks the IP in memory and persists it to DB asynchronously.
+func (bm *BlacklistManager) Blacklist(ip, reason string) {
+	bm.mu.Lock()
+	bm.ips[ip] = struct{}{}
+	bm.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := bm.repo.BlacklistIP(ctx, ip, reason); err != nil {
+			log.Printf("[SECURITY ERROR] Failed to persist blacklisted IP %s: %v", ip, err)
+		}
+	}()
+}
+
+// Count returns the number of blacklisted IPs in memory.
+func (bm *BlacklistManager) Count() int {
+	bm.mu.RLock()
+	defer bm.mu.RUnlock()
+	return len(bm.ips)
+}
+
+func (bm *BlacklistManager) startPeriodicSync(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			bm.LoadFromDB()
+		case <-bm.stopCh:
+			return
+		}
+	}
+}
+
+// Stop stops the background synchronization.
+func (bm *BlacklistManager) Stop() {
+	close(bm.stopCh)
+}
+
+// IPBlacklist checks if the client IP is in the blacklist using in-memory lookup.
+func IPBlacklist(bm *BlacklistManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
 
@@ -107,17 +199,7 @@ func IPBlacklist(repo repository.Repository) gin.HandlerFunc {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		isBlacklisted, err := repo.IsIPBlacklisted(ctx, ip)
-		if err != nil {
-			log.Printf("[SECURITY ERROR] Failed to check blacklist for IP %s: %v", ip, err)
-			c.Next()
-			return
-		}
-
-		if isBlacklisted {
+		if bm.IsBlacklisted(ip) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error": "your IP has been blacklisted due to suspicious activity",
 			})
@@ -129,7 +211,7 @@ func IPBlacklist(repo repository.Repository) gin.HandlerFunc {
 }
 
 // SuspiciousPathLogger logs IPs attempting suspicious paths and blacklists them.
-func SuspiciousPathLogger(repo repository.Repository) gin.HandlerFunc {
+func SuspiciousPathLogger(bm *BlacklistManager, repo repository.Repository) gin.HandlerFunc {
 	suspiciousPatterns := []string{
 		"index.php", ".php", ".cgi", ".env", "wp-admin", ".git",
 	}
@@ -163,22 +245,16 @@ func SuspiciousPathLogger(repo repository.Repository) gin.HandlerFunc {
 		if isSuspicious {
 			log.Printf("[SECURITY] Suspicious access attempt from %s: %s %s. Blacklisting.", ip, c.Request.Method, c.Request.URL.Path)
 
-			// Blacklist IP asynchronously
-			go func(ipAddr, rsn string) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := repo.BlacklistIP(ctx, ipAddr, rsn); err != nil {
-					log.Printf("[SECURITY ERROR] Failed to blacklist IP %s: %v", ipAddr, err)
-				}
-			}(ip, reason)
+			// Blacklist IP immediately in-memory and asynchronously persist to DB
+			bm.Blacklist(ip, reason)
 
-		securityLog := &models.SecurityLog{
-			IP:        ip,
-			Path:      c.Request.URL.Path,
-			Method:    c.Request.Method,
-			UserAgent: c.Request.UserAgent(),
-			Timestamp: time.Now().Local(),
-		}
+			securityLog := &models.SecurityLog{
+				IP:        ip,
+				Path:      c.Request.URL.Path,
+				Method:    c.Request.Method,
+				UserAgent: c.Request.UserAgent(),
+				Timestamp: time.Now().Local(),
+			}
 			go func(l *models.SecurityLog) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()

@@ -75,6 +75,7 @@ type Repository interface {
 	// Blacklist
 	BlacklistIP(ctx context.Context, ip string, reason string) error
 	IsIPBlacklisted(ctx context.Context, ip string) (bool, error)
+	GetBlacklistedIPs(ctx context.Context) ([]string, error)
 
 	// Schedule
 	ScheduleRepo() ScheduleRepository

@@ -602,6 +602,11 @@ func (r *SQLRepository) UpdateSettings(ctx context.Context, setting *models.Glob
 // --- Blacklist ---
 
 func (r *SQLRepository) BlacklistIP(ctx context.Context, ip string, reason string) error {
+	var count int64
+	r.db.WithContext(ctx).Model(&models.BlacklistedIP{}).Where("ip = ?", ip).Count(&count)
+	if count > 0 {
+		return nil
+	}
 	blacklisted := models.BlacklistedIP{
 		ID:        generateID(),
 		IP:        ip,
@@ -618,6 +623,18 @@ func (r *SQLRepository) IsIPBlacklisted(ctx context.Context, ip string) (bool, e
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func (r *SQLRepository) GetBlacklistedIPs(ctx context.Context) ([]string, error) {
+	var ips []string
+	err := r.db.WithContext(ctx).Model(&models.BlacklistedIP{}).Pluck("ip", &ips).Error
+	if err != nil {
+		return nil, err
+	}
+	if ips == nil {
+		ips = []string{}
+	}
+	return ips, nil
 }
 
 // --- Schedule ---

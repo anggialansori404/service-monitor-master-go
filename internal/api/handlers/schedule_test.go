@@ -189,6 +189,7 @@ func (m *mockRepo) GetSettings(_ context.Context) (*models.GlobalSetting, error)
 func (m *mockRepo) UpdateSettings(_ context.Context, _ *models.GlobalSetting) error { return nil }
 func (m *mockRepo) BlacklistIP(_ context.Context, _ string, _ string) error       { return nil }
 func (m *mockRepo) IsIPBlacklisted(_ context.Context, _ string) (bool, error)     { return false, nil }
+func (m *mockRepo) GetBlacklistedIPs(_ context.Context) ([]string, error)          { return []string{}, nil }
 
 // --- Mock Scheduler ---
 

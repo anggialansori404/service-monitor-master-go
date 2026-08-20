@@ -1108,13 +1108,19 @@ func (r *MongoRepository) UpdateSettings(ctx context.Context, setting *models.Gl
 
 func (r *MongoRepository) BlacklistIP(ctx context.Context, ip string, reason string) error {
 	coll := r.db.Collection("blacklisted_ips")
-	blacklisted := models.BlacklistedIP{
-		ID:        bson.NewObjectID().Hex(),
-		IP:        ip,
-		Reason:    reason,
-		CreatedAt: time.Now().Local(),
+	filter := bson.M{"ip": ip}
+	update := bson.M{
+		"$setOnInsert": bson.M{
+			"_id":        bson.NewObjectID().Hex(),
+			"created_at": time.Now().Local(),
+		},
+		"$set": bson.M{
+			"ip":     ip,
+			"reason": reason,
+		},
 	}
-	_, err := coll.InsertOne(ctx, blacklisted)
+	opts := options.UpdateOne().SetUpsert(true)
+	_, err := coll.UpdateOne(ctx, filter, update, opts)
 	return err
 }
 
@@ -1125,6 +1131,27 @@ func (r *MongoRepository) IsIPBlacklisted(ctx context.Context, ip string) (bool,
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func (r *MongoRepository) GetBlacklistedIPs(ctx context.Context) ([]string, error) {
+	coll := r.db.Collection("blacklisted_ips")
+	cursor, err := coll.Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var ips []string
+	for cursor.Next(ctx) {
+		var item models.BlacklistedIP
+		if err := cursor.Decode(&item); err == nil && item.IP != "" {
+			ips = append(ips, item.IP)
+		}
+	}
+	if ips == nil {
+		ips = []string{}
+	}
+	return ips, nil
 }
 
 // --- Schedule ---

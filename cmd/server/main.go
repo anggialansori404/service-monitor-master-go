@@ -182,14 +182,17 @@ func main() {
 		}
 	}
 
+	// --- Blacklist Manager (In-Memory Cache) ---
+	blacklistMgr := middleware.NewBlacklistManager(repo)
+
 	// --- Gin Router ---
 	r := gin.Default()
 
 	// --- Security Middleware ---
-	r.Use(middleware.IPBlacklist(repo))
+	r.Use(middleware.IPBlacklist(blacklistMgr))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.GlobalRateLimiter())
-	r.Use(middleware.SuspiciousPathLogger(repo))
+	r.Use(middleware.SuspiciousPathLogger(blacklistMgr, repo))
 	// --- Custom Tarpit 404 NoRoute ---
 	r.NoRoute(func(c *gin.Context) {
 		// Delay 1 second to slow down scanners (Masscan, FFuf, Nuclei, Nikto)
