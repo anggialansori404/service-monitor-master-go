@@ -1256,7 +1256,19 @@ func (r *MongoRepository) GetEnabledSchedules(ctx context.Context) ([]models.Sch
 func (r *MongoRepository) UpdateScheduleRunTimes(ctx context.Context, scheduleID string, lastRunAt, nextRunAt time.Time) error {
 	coll := r.db.Collection("schedules")
 	filter := bson.M{"_id": scheduleID}
-	update := bson.M{"$set": bson.M{"last_run_at": lastRunAt, "next_run_at": nextRunAt}}
+
+	setFields := bson.M{}
+	if !lastRunAt.IsZero() {
+		setFields["last_run_at"] = lastRunAt
+	}
+	if !nextRunAt.IsZero() {
+		setFields["next_run_at"] = nextRunAt
+	}
+	if len(setFields) == 0 {
+		return nil
+	}
+
+	update := bson.M{"$set": setFields}
 	_, err := coll.UpdateOne(ctx, filter, update)
 	return err
 }

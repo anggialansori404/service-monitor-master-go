@@ -310,3 +310,30 @@ func TestSchedulerDeletedSchedule(t *testing.T) {
 		t.Fatalf("LoadSchedules() after delete should not error, got: %v", err)
 	}
 }
+
+func TestNextRunCalculation(t *testing.T) {
+	repo := newMockRepo()
+	seedSchedule(repo, "sched-test", "Midnight Test", "0 0 * * *", true)
+
+	sched, err := New(repo, nil)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer sched.Stop()
+
+	job, ok := sched.jobs["sched-test"]
+	if !ok {
+		t.Fatal("expected sched-test to be in jobs map")
+	}
+
+	nextRun, err := job.NextRun()
+	if err != nil {
+		t.Fatalf("NextRun error: %v", err)
+	}
+	if nextRun.IsZero() {
+		t.Errorf("expected non-zero nextRun right after New(), got %v", nextRun)
+	}
+	if nextRun.Year() < 2026 {
+		t.Errorf("expected valid future year (>= 2026), got %v", nextRun)
+	}
+}

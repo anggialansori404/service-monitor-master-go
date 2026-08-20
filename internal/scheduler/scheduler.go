@@ -25,7 +25,7 @@ type ServiceScheduler struct {
 	mu              sync.RWMutex
 }
 
-// New creates a ServiceScheduler, loads existing enabled schedules from DB,
+// New creates a ServiceScheduler, starts the gocron engine, loads existing enabled schedules from DB,
 // and registers them as gocron jobs.
 func New(repo repository.Repository, registry *ws.Registry) (*ServiceScheduler, error) {
 	gs, err := gocron.NewScheduler()
@@ -41,6 +41,9 @@ func New(repo repository.Repository, registry *ws.Registry) (*ServiceScheduler, 
 		institutionMu:   make(map[string]*sync.Mutex),
 	}
 
+	// Start gocron scheduler engine first so that NextRun() can calculate immediately on job registration
+	s.gocronScheduler.Start()
+
 	if err := s.LoadSchedules(); err != nil {
 		log.Printf("scheduler: warning: failed to load existing schedules: %v", err)
 	}
@@ -48,7 +51,7 @@ func New(repo repository.Repository, registry *ws.Registry) (*ServiceScheduler, 
 	return s, nil
 }
 
-// Start starts the gocron scheduler.
+// Start starts or ensures the gocron scheduler is running.
 func (s *ServiceScheduler) Start() {
 	s.gocronScheduler.Start()
 	log.Println("scheduler: started")
@@ -106,13 +109,17 @@ func (s *ServiceScheduler) AddSchedule(schedule *models.Schedule) error {
 	s.jobs[schedule.ID] = job
 	s.mu.Unlock()
 
-	// Update NextRunAt in DB.
+	// Update NextRunAt in DB only if NextRun() is valid and non-zero
 	nextRun, err := job.NextRun()
-	if err == nil {
+	if err == nil && !nextRun.IsZero() {
 		_ = s.repo.ScheduleRepo().UpdateScheduleRunTimes(context.Background(), schedule.ID, time.Time{}, nextRun)
 	}
 
-	log.Printf("scheduler: registered job for schedule %s (%s), next run: %v", schedule.ID, schedule.Name, nextRun)
+	if nextRun.IsZero() {
+		log.Printf("scheduler: registered job for schedule %s (%s)", schedule.ID, schedule.Name)
+	} else {
+		log.Printf("scheduler: registered job for schedule %s (%s), next run: %s", schedule.ID, schedule.Name, nextRun.Format("2006-01-02 15:04:05 MST"))
+	}
 	return nil
 }
 

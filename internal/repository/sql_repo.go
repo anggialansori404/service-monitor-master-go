@@ -706,8 +706,15 @@ func (r *SQLRepository) GetEnabledSchedules(ctx context.Context) ([]models.Sched
 }
 
 func (r *SQLRepository) UpdateScheduleRunTimes(ctx context.Context, scheduleID string, lastRunAt, nextRunAt time.Time) error {
-	return r.db.WithContext(ctx).Model(&models.Schedule{}).Where("id = ?", scheduleID).Updates(map[string]interface{}{
-		"last_run_at": lastRunAt,
-		"next_run_at": nextRunAt,
-	}).Error
+	updates := make(map[string]interface{})
+	if !lastRunAt.IsZero() {
+		updates["last_run_at"] = lastRunAt
+	}
+	if !nextRunAt.IsZero() {
+		updates["next_run_at"] = nextRunAt
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Model(&models.Schedule{}).Where("id = ?", scheduleID).Updates(updates).Error
 }
