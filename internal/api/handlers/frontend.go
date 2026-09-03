@@ -712,8 +712,9 @@ func (h *FrontendHandler) TestInstitutionAlert(c *gin.Context) {
 }
 
 type setMaintenanceModeReq struct {
-	Enabled         bool `json:"enabled"`
-	DurationMinutes int  `json:"duration_minutes"` // e.g. 30, 60, 120; 0 means indefinite until manual disable
+	Enabled         *bool `json:"enabled"`
+	InMaintenance   *bool `json:"in_maintenance"`
+	DurationMinutes int   `json:"duration_minutes"` // e.g. 30, 60, 120; 0 means indefinite until manual disable
 }
 
 // SetMaintenanceMode handles POST /institutions/:id/maintenance.
@@ -731,6 +732,13 @@ func (h *FrontendHandler) SetMaintenanceMode(c *gin.Context) {
 		return
 	}
 
+	var isEnabled bool
+	if req.InMaintenance != nil {
+		isEnabled = *req.InMaintenance
+	} else if req.Enabled != nil {
+		isEnabled = *req.Enabled
+	}
+
 	inst, err := h.Repo.GetInstitutionByID(id)
 	if err != nil {
 		if err == repository.ErrNotFound {
@@ -741,8 +749,8 @@ func (h *FrontendHandler) SetMaintenanceMode(c *gin.Context) {
 		return
 	}
 
-	inst.InMaintenance = req.Enabled
-	if req.Enabled && req.DurationMinutes > 0 {
+	inst.InMaintenance = isEnabled
+	if isEnabled && req.DurationMinutes > 0 {
 		until := time.Now().Add(time.Duration(req.DurationMinutes) * time.Minute)
 		inst.MaintenanceUntil = &until
 	} else {
@@ -757,7 +765,7 @@ func (h *FrontendHandler) SetMaintenanceMode(c *gin.Context) {
 	// Audit log
 	action := "DISABLE_MAINTENANCE_MODE"
 	details := fmt.Sprintf("Disabled maintenance mode for %s", inst.Name)
-	if req.Enabled {
+	if isEnabled {
 		action = "ENABLE_MAINTENANCE_MODE"
 		if inst.MaintenanceUntil != nil {
 			details = fmt.Sprintf("Enabled maintenance mode for %s until %s (%d mins)", inst.Name, inst.MaintenanceUntil.Format(time.RFC3339), req.DurationMinutes)
@@ -778,6 +786,7 @@ func (h *FrontendHandler) SetMaintenanceMode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message":           "Maintenance mode updated successfully",
 		"in_maintenance":    inst.InMaintenance,
+		"enabled":           inst.InMaintenance,
 		"maintenance_until": inst.MaintenanceUntil,
 	})
 }
