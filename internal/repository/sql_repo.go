@@ -131,8 +131,8 @@ func (r *SQLRepository) UpdateInstitution(inst *models.Institution) error {
 	if inst.ID == "" {
 		return ErrNotFound
 	}
-	// Save will save all fields. To only update changed fields, we can use Updates
-	result := r.db.Model(&models.Institution{}).Where("id = ?", inst.ID).Updates(inst)
+	// Select("*").Omit("Services") ensures zero-values (e.g. false, empty string) are persisted
+	result := r.db.Model(&models.Institution{}).Where("id = ?", inst.ID).Select("*").Omit("Services").Updates(inst)
 	if result.Error != nil {
 		return result.Error
 	}

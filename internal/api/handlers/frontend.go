@@ -596,6 +596,15 @@ func (h *FrontendHandler) UpdateInstitution(c *gin.Context) {
 	c.JSON(http.StatusOK, inst)
 }
 
+type testInstitutionAlertReq struct {
+	UseCustomTelegram    *bool   `json:"use_custom_telegram"`
+	TelegramBotToken     *string `json:"telegram_bot_token"`
+	TelegramChatID       *string `json:"telegram_chat_id"`
+	TelegramTopicID      *string `json:"telegram_topic_id"`
+	EnableTelegramAlerts *bool   `json:"enable_telegram_alerts"`
+	MirrorToGlobal       *bool   `json:"mirror_to_global"`
+}
+
 // TestInstitutionAlert handles POST /institutions/:id/test-alert.
 // Sends a test message to the institution's resolved Telegram destination(s).
 func (h *FrontendHandler) TestInstitutionAlert(c *gin.Context) {
@@ -615,6 +624,36 @@ func (h *FrontendHandler) TestInstitutionAlert(c *gin.Context) {
 		return
 	}
 
+	// Override fields if provided in request body (e.g. testing directly from modal inputs)
+	var req testInstitutionAlertReq
+	if err := c.ShouldBindJSON(&req); err == nil {
+		if req.UseCustomTelegram != nil {
+			inst.UseCustomTelegram = *req.UseCustomTelegram
+		}
+		if req.TelegramBotToken != nil {
+			inst.TelegramBotToken = *req.TelegramBotToken
+		}
+		if req.TelegramChatID != nil {
+			inst.TelegramChatID = *req.TelegramChatID
+		}
+		if req.TelegramTopicID != nil {
+			inst.TelegramTopicID = *req.TelegramTopicID
+		}
+		if req.EnableTelegramAlerts != nil {
+			inst.EnableTelegramAlerts = *req.EnableTelegramAlerts
+		}
+		if req.MirrorToGlobal != nil {
+			inst.MirrorToGlobal = *req.MirrorToGlobal
+		}
+	}
+
+	if inst.UseCustomTelegram {
+		if inst.TelegramBotToken == "" || inst.TelegramChatID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Bot Token dan Chat ID / Grup ID lembaga wajib diisi untuk menguji bot khusus lembaga."})
+			return
+		}
+	}
+
 	setting, _ := h.Repo.GetSettings(c.Request.Context())
 	targets := alert.ResolveTelegramTargets(inst, setting)
 	if len(targets) == 0 {
@@ -626,28 +665,49 @@ func (h *FrontendHandler) TestInstitutionAlert(c *gin.Context) {
 		inst.Name, time.Now().Format("02 Jan 2006 15:04:05"))
 
 	successCount := 0
-	var lastErr error
+	var customErr error
+	var globalErr error
+
 	for _, target := range targets {
 		_, err := services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, testMsg)
 		if err == nil {
 			successCount++
 		} else {
-			lastErr = err
+			if target.IsGlobal {
+				globalErr = err
+			} else {
+				customErr = err
+			}
 			log.Printf("Failed to send test alert to target %+v: %v", target, err)
 		}
 	}
 
+	// If custom bot target failed, report failure specifically for custom bot
+	if customErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("Gagal mengirim ke Bot Lembaga (Chat ID: %s): %v. Pastikan Bot Token valid, Bot telah dimasukkan ke grup/channel sebagai Admin, dan Chat ID benar.", inst.TelegramChatID, customErr),
+		})
+		return
+	}
+
 	if successCount == 0 {
-		errMsg := "Gagal mengirim pesan ke Telegram. Pastikan Bot Token, Chat ID, dan Topic ID benar serta bot telah ditambahkan ke grup."
-		if lastErr != nil {
-			errMsg = fmt.Sprintf("%s (Error: %v)", errMsg, lastErr)
+		errMsg := "Gagal mengirim notifikasi ke Telegram."
+		if globalErr != nil {
+			errMsg = fmt.Sprintf("Gagal mengirim ke Telegram Global: %v", globalErr)
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
 		return
 	}
 
+	msg := fmt.Sprintf("Berhasil mengirim test notifikasi ke %d tujuan Telegram.", successCount)
+	if inst.UseCustomTelegram && inst.MirrorToGlobal {
+		msg = fmt.Sprintf("Berhasil mengirim test notifikasi ke Bot Lembaga (%s) dan Grup Global Admin.", inst.TelegramChatID)
+	} else if inst.UseCustomTelegram {
+		msg = fmt.Sprintf("Berhasil mengirim test notifikasi ke Bot Lembaga (%s).", inst.TelegramChatID)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"message": fmt.Sprintf("Berhasil mengirim test notifikasi ke %d tujuan Telegram.", successCount),
+		"message": msg,
 	})
 }
 

@@ -7,12 +7,15 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 )
 
 // telegramResponse is the response from Telegram sendMessage / editMessageText API.
 type telegramResponse struct {
-	OK     bool `json:"ok"`
-	Result struct {
+	OK          bool   `json:"ok"`
+	ErrorCode   int    `json:"error_code"`
+	Description string `json:"description"`
+	Result      struct {
 		MessageID int `json:"message_id"`
 	} `json:"result"`
 }
@@ -32,7 +35,11 @@ func SendTelegramAlert(token, chatID, topicID, message string) (int, error) {
 	}
 
 	if topicID != "" {
-		payload["message_thread_id"] = topicID
+		if threadID, err := strconv.Atoi(topicID); err == nil {
+			payload["message_thread_id"] = threadID
+		} else {
+			payload["message_thread_id"] = topicID
+		}
 	}
 
 	body, err := json.Marshal(payload)
@@ -48,18 +55,21 @@ func SendTelegramAlert(token, chatID, topicID, message string) (int, error) {
 
 	respBody, _ := io.ReadAll(resp.Body)
 
+	var tresp telegramResponse
+	_ = json.Unmarshal(respBody, &tresp)
+
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Telegram sendMessage returned %d: %s", resp.StatusCode, string(respBody))
-		return 0, fmt.Errorf("telegram api returned %d", resp.StatusCode)
-	}
-
-	var tresp telegramResponse
-	if err := json.Unmarshal(respBody, &tresp); err != nil {
-		log.Printf("Failed to unmarshal telegram response: %v (body: %s)", err, string(respBody))
-		return 0, err
+		if tresp.Description != "" {
+			return 0, fmt.Errorf("%s (code %d)", tresp.Description, resp.StatusCode)
+		}
+		return 0, fmt.Errorf("telegram api returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	if !tresp.OK {
+		if tresp.Description != "" {
+			return 0, fmt.Errorf("%s", tresp.Description)
+		}
 		return 0, fmt.Errorf("telegram api ok=false")
 	}
 

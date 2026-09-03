@@ -270,11 +270,17 @@ func (r *MongoRepository) UpdateInstitution(inst *models.Institution) error {
 	objID, _ := parseObjectID(inst.ID)
 	// First encode to string, re-decode to intermediate to handle ID overwrite if any. We will use a BSON mapping directly.
 	mapped := bson.M{
-		"name":       inst.Name,
-		"agent_id":   inst.AgentID,
-		"secret_key": inst.SecretKey,
-		"is_active":  inst.IsActive,
-		"last_ping":  inst.LastPing,
+		"name":                   inst.Name,
+		"agent_id":               inst.AgentID,
+		"secret_key":             inst.SecretKey,
+		"is_active":              inst.IsActive,
+		"last_ping":              inst.LastPing,
+		"use_custom_telegram":    inst.UseCustomTelegram,
+		"telegram_bot_token":     inst.TelegramBotToken,
+		"telegram_chat_id":       inst.TelegramChatID,
+		"telegram_topic_id":      inst.TelegramTopicID,
+		"enable_telegram_alerts": inst.EnableTelegramAlerts,
+		"mirror_to_global":       inst.MirrorToGlobal,
 	}
 
 	coll := r.db.Collection("institutions")
