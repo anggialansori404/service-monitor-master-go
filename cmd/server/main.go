@@ -282,6 +282,7 @@ func main() {
 		institutionsGroup.DELETE("/:id", frontendHandler.DeleteInstitution)
 		institutionsGroup.POST("/:id/regenerate-keys", frontendHandler.RegenerateKeys)
 		institutionsGroup.GET("/:id/credentials", frontendHandler.GetInstitutionCredentials)
+		institutionsGroup.POST("/:id/test-alert", frontendHandler.TestInstitutionAlert)
 	}
 
 	// Schedule endpoints (JWT-protected)

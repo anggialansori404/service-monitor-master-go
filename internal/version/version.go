@@ -12,7 +12,7 @@ import (
 
 // Version info variables (can be overridden during build with -ldflags)
 var (
-	Version   = "v1.2.0"
+	Version   = "v1.2.1"
 	AppName   = "Service Monitor Master"
 	BuildTime = ""
 	GitCommit = ""
@@ -53,15 +53,15 @@ func init() {
 
 // Info holds consolidated version and runtime metadata
 type Info struct {
-	AppName    string `json:"app_name"`
-	Version    string `json:"version"`
-	BuildTime  string `json:"build_time,omitempty"`
-	GitCommit  string `json:"git_commit,omitempty"`
-	GoVersion  string `json:"go_version"`
-	OS         string `json:"os"`
-	Arch       string `json:"arch"`
-	NumCPU     int    `json:"num_cpu"`
-	PID        int    `json:"pid"`
+	AppName   string `json:"app_name"`
+	Version   string `json:"version"`
+	BuildTime string `json:"build_time,omitempty"`
+	GitCommit string `json:"git_commit,omitempty"`
+	GoVersion string `json:"go_version"`
+	OS        string `json:"os"`
+	Arch      string `json:"arch"`
+	NumCPU    int    `json:"num_cpu"`
+	PID       int    `json:"pid"`
 }
 
 // Get returns the consolidated runtime and version metadata

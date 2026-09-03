@@ -31,7 +31,7 @@ type WSHandler struct {
 	Registry          *ws.Registry
 	Repo              repository.Repository
 	AlertMgr          *alert.Manager
-	disconnectMsgIDs  map[string][]int // institutionID -> telegram message_ids of last disconnect alerts
+	disconnectMsgIDs  map[string][]alert.TargetMessageID // institutionID -> telegram message_ids of last disconnect alerts
 }
 
 // NewWSHandler creates a new WSHandler.
@@ -40,7 +40,7 @@ func NewWSHandler(registry *ws.Registry, repo repository.Repository, alertMgr *a
 		Registry:         registry,
 		Repo:             repo,
 		AlertMgr:         alertMgr,
-		disconnectMsgIDs: make(map[string][]int),
+		disconnectMsgIDs: make(map[string][]alert.TargetMessageID),
 	}
 }
 
@@ -84,17 +84,15 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	log.Printf("agent connected: %s (institution: %s)", agentID, institution.Name)
 
 	// On reconnect, edit ALL previous "disconnected" Telegram messages to "recovered"
-	if msgIDs, ok := h.disconnectMsgIDs[instID]; ok && len(msgIDs) > 0 {
-		if setting, err := h.Repo.GetSettings(context.Background()); err == nil && setting.EnableTelegramAlerts {
-			recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\n\nNode Agent kembali tersambung!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Sistem kembali normal._",
-				institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
-			for _, msgID := range msgIDs {
-				if msgID == 0 {
-					continue
-				}
-				if err := services.EditTelegramMessage(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msgID, recoveryMsg); err != nil {
-					log.Printf("Failed to edit disconnect alert for %s (msgID %d): %v", institution.Name, msgID, err)
-				}
+	if targetMsgs, ok := h.disconnectMsgIDs[instID]; ok && len(targetMsgs) > 0 {
+		recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\n\nNode Agent kembali tersambung!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Sistem kembali normal._",
+			institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
+		for _, item := range targetMsgs {
+			if item.MessageID == 0 {
+				continue
+			}
+			if err := services.EditTelegramMessage(item.Target.Token, item.Target.ChatID, item.Target.TopicID, item.MessageID, recoveryMsg); err != nil {
+				log.Printf("Failed to edit disconnect alert for %s (msgID %d): %v", institution.Name, item.MessageID, err)
 			}
 		}
 		delete(h.disconnectMsgIDs, instID)
@@ -104,16 +102,21 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 		h.Registry.Unregister(agentID)
 		log.Printf("agent disconnected: %s (institution: %s)", agentID, institution.Name)
 
-		// TRIGGER TELEGRAM ALERT — track message_id for later edit
+		// TRIGGER TELEGRAM ALERT — track message_id for later edit across all resolved targets
 		alertMsg := fmt.Sprintf("🔴 *CRITICAL ALERT*\n\nNode Agent terputus (Offline)!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Mohon segera periksa server/VPS lembaga terkait._",
 			institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
 
-		if setting, err := h.Repo.GetSettings(context.Background()); err == nil && setting.EnableTelegramAlerts {
-			msgID, sendErr := services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, alertMsg)
+		setting, _ := h.Repo.GetSettings(context.Background())
+		targets := alert.ResolveTelegramTargets(institution, setting)
+		for _, target := range targets {
+			msgID, sendErr := services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, alertMsg)
 			if sendErr != nil {
-				log.Printf("Failed to send disconnect alert for %s: %v", institution.Name, sendErr)
+				log.Printf("Failed to send disconnect alert for %s to target %+v: %v", institution.Name, target, sendErr)
 			} else if msgID != 0 {
-				h.disconnectMsgIDs[instID] = append(h.disconnectMsgIDs[instID], msgID)
+				h.disconnectMsgIDs[instID] = append(h.disconnectMsgIDs[instID], alert.TargetMessageID{
+					Target:    target,
+					MessageID: msgID,
+				})
 				log.Printf("Saved disconnect message_id %d for institution %s (total pending: %d)", msgID, institution.Name, len(h.disconnectMsgIDs[instID]))
 			}
 		}

@@ -27,8 +27,8 @@ type AlertEvent struct {
 // batchState tracks an active Telegram batch alert for one institution.
 // Used to edit the batch message when services recover.
 type batchState struct {
-	MessageID   int
-	DownService map[string]AlertEvent // key: serviceName
+	SentMessages []TargetMessageID
+	DownService  map[string]AlertEvent // key: serviceName
 }
 
 // Manager handles alert deduplication and batched sending
@@ -149,7 +149,7 @@ func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
 }
 
 // editBatchOnRecovery removes a recovered service from the active batch message
-// and edits the Telegram message.
+// and edits the Telegram message across all sent targets.
 func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *batchState, recoveryEvent AlertEvent) {
 	m.mu.Lock()
 
@@ -157,7 +157,8 @@ func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *ba
 	delete(bs.DownService, recoveryEvent.ServiceName)
 
 	remaining := len(bs.DownService)
-	msgID := bs.MessageID
+	sentMessages := make([]TargetMessageID, len(bs.SentMessages))
+	copy(sentMessages, bs.SentMessages)
 
 	if remaining == 0 {
 		// All services recovered — delete batch state
@@ -200,13 +201,12 @@ func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *ba
 		newText = sb.String()
 	}
 
-	// Edit the Telegram message
-	setting, err := m.repo.GetSettings(ctx)
-	if err == nil && setting.EnableTelegramAlerts {
-		log.Printf("AlertEngine editing BATCH message %d for %s (recovery: %s, remaining: %d)",
-			msgID, inst.Name, recoveryEvent.ServiceName, remaining)
-		if err := services.EditTelegramMessage(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msgID, newText); err != nil {
-			log.Printf("Failed to edit batch alert for %s (msgID %d): %v", inst.Name, msgID, err)
+	// Edit the Telegram message across all sent targets
+	for _, sent := range sentMessages {
+		log.Printf("AlertEngine editing BATCH message %d for %s (recovery: %s, remaining: %d, isGlobal: %v)",
+			sent.MessageID, inst.Name, recoveryEvent.ServiceName, remaining, sent.Target.IsGlobal)
+		if err := services.EditTelegramMessage(sent.Target.Token, sent.Target.ChatID, sent.Target.TopicID, sent.MessageID, newText); err != nil {
+			log.Printf("Failed to edit batch alert for %s (msgID %d, target %+v): %v", inst.Name, sent.MessageID, sent.Target, err)
 		}
 	}
 }
@@ -289,23 +289,35 @@ func (m *Manager) sendBatchedAlert(ctx context.Context, instID string, events []
 		sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i+1, name))
 	}
 
-	setting, err := m.repo.GetSettings(ctx)
-	if err == nil && setting.EnableTelegramAlerts {
-		log.Printf("AlertEngine sending BATCH telegram message to %s", inst.Name)
-		msgID, sendErr := services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, sb.String())
-		if sendErr != nil {
-			log.Printf("AlertEngine failed to send batch: %v", sendErr)
-			return
-		}
+	setting, _ := m.repo.GetSettings(ctx)
+	targets := ResolveTelegramTargets(inst, setting)
+	if len(targets) == 0 {
+		return
+	}
 
+	log.Printf("AlertEngine sending BATCH telegram message to %s (%d destinations)", inst.Name, len(targets))
+	var sentMsgs []TargetMessageID
+	for _, target := range targets {
+		msgID, sendErr := services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, sb.String())
+		if sendErr != nil {
+			log.Printf("AlertEngine failed to send batch to target %+v: %v", target, sendErr)
+		} else if msgID != 0 {
+			sentMsgs = append(sentMsgs, TargetMessageID{
+				Target:    target,
+				MessageID: msgID,
+			})
+		}
+	}
+
+	if len(sentMsgs) > 0 {
 		// Track the batch message for future edits
 		m.mu.Lock()
 		m.batchStates[instID] = &batchState{
-			MessageID:   msgID,
-			DownService: downMap,
+			SentMessages: sentMsgs,
+			DownService:  downMap,
 		}
 		m.mu.Unlock()
-		log.Printf("AlertEngine: batch message_id=%d tracked for institution %s (%d services)", msgID, inst.Name, len(downMap))
+		log.Printf("AlertEngine: batch tracked for institution %s (%d services, %d destinations)", inst.Name, len(downMap), len(sentMsgs))
 	}
 }
 
@@ -318,9 +330,10 @@ func (m *Manager) sendDirectAlert(ctx context.Context, event AlertEvent) {
 	msg := fmt.Sprintf("✅ *SERVICE RECOVERY*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s",
 		inst.Name, event.ServiceName, time.Now().Local().Format("02 Jan 2006 15:04:05"))
 
-	setting, err := m.repo.GetSettings(ctx)
-	if err == nil && setting.EnableTelegramAlerts {
-		log.Printf("AlertEngine sending DIRECT telegram message: %s - %s", inst.Name, event.ServiceName)
-		services.SendTelegramAlert(setting.TelegramBotToken, setting.TelegramChatID, setting.TelegramTopicID, msg)
+	setting, _ := m.repo.GetSettings(ctx)
+	targets := ResolveTelegramTargets(inst, setting)
+	for _, target := range targets {
+		log.Printf("AlertEngine sending DIRECT telegram message: %s - %s to %+v", inst.Name, event.ServiceName, target)
+		_, _ = services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, msg)
 	}
 }

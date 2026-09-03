@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"time"
 
+	"monitoring-master/internal/alert"
 	"monitoring-master/internal/logutil"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
+	"monitoring-master/internal/services"
 	"monitoring-master/internal/ws"
 
 	"crypto/rand"
@@ -432,7 +434,13 @@ func generateRandomString(n int) string {
 
 // createInstitutionReq is the expected payload for POST /institutions.
 type createInstitutionReq struct {
-	Name string `json:"name" binding:"required"`
+	Name                 string `json:"name" binding:"required"`
+	UseCustomTelegram    bool   `json:"use_custom_telegram"`
+	TelegramBotToken     string `json:"telegram_bot_token"`
+	TelegramChatID       string `json:"telegram_chat_id"`
+	TelegramTopicID      string `json:"telegram_topic_id"`
+	EnableTelegramAlerts *bool  `json:"enable_telegram_alerts"`
+	MirrorToGlobal       bool   `json:"mirror_to_global"`
 }
 
 // CreateInstitution handles POST /institutions.
@@ -444,11 +452,22 @@ func (h *FrontendHandler) CreateInstitution(c *gin.Context) {
 		return
 	}
 
+	enableAlerts := true
+	if req.EnableTelegramAlerts != nil {
+		enableAlerts = *req.EnableTelegramAlerts
+	}
+
 	inst := models.Institution{
-		Name:      req.Name,
-		AgentID:   uuid.New().String(),
-		SecretKey: generateRandomString(32),
-		IsActive:  true,
+		Name:                 req.Name,
+		AgentID:              uuid.New().String(),
+		SecretKey:            generateRandomString(32),
+		IsActive:             true,
+		UseCustomTelegram:    req.UseCustomTelegram,
+		TelegramBotToken:     req.TelegramBotToken,
+		TelegramChatID:       req.TelegramChatID,
+		TelegramTopicID:      req.TelegramTopicID,
+		EnableTelegramAlerts: enableAlerts,
+		MirrorToGlobal:       req.MirrorToGlobal,
 	}
 
 	if err := h.Repo.CreateInstitution(&inst); err != nil {
@@ -462,8 +481,14 @@ func (h *FrontendHandler) CreateInstitution(c *gin.Context) {
 
 // updateInstitutionReq is the expected payload for PUT /institutions/:id.
 type updateInstitutionReq struct {
-	Name     string `json:"name"`
-	IsActive *bool  `json:"is_active"`
+	Name                 string  `json:"name"`
+	IsActive             *bool   `json:"is_active"`
+	UseCustomTelegram    *bool   `json:"use_custom_telegram"`
+	TelegramBotToken     *string `json:"telegram_bot_token"`
+	TelegramChatID       *string `json:"telegram_chat_id"`
+	TelegramTopicID      *string `json:"telegram_topic_id"`
+	EnableTelegramAlerts *bool   `json:"enable_telegram_alerts"`
+	MirrorToGlobal       *bool   `json:"mirror_to_global"`
 }
 
 // GetInstitution handles GET /institutions/:id.
@@ -544,6 +569,24 @@ func (h *FrontendHandler) UpdateInstitution(c *gin.Context) {
 	if req.IsActive != nil {
 		inst.IsActive = *req.IsActive
 	}
+	if req.UseCustomTelegram != nil {
+		inst.UseCustomTelegram = *req.UseCustomTelegram
+	}
+	if req.TelegramBotToken != nil {
+		inst.TelegramBotToken = *req.TelegramBotToken
+	}
+	if req.TelegramChatID != nil {
+		inst.TelegramChatID = *req.TelegramChatID
+	}
+	if req.TelegramTopicID != nil {
+		inst.TelegramTopicID = *req.TelegramTopicID
+	}
+	if req.EnableTelegramAlerts != nil {
+		inst.EnableTelegramAlerts = *req.EnableTelegramAlerts
+	}
+	if req.MirrorToGlobal != nil {
+		inst.MirrorToGlobal = *req.MirrorToGlobal
+	}
 
 	if err := h.Repo.UpdateInstitution(inst); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update institution"})
@@ -551,6 +594,61 @@ func (h *FrontendHandler) UpdateInstitution(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, inst)
+}
+
+// TestInstitutionAlert handles POST /institutions/:id/test-alert.
+// Sends a test message to the institution's resolved Telegram destination(s).
+func (h *FrontendHandler) TestInstitutionAlert(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid institution id"})
+		return
+	}
+
+	inst, err := h.Repo.GetInstitutionByID(id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "institution not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
+	setting, _ := h.Repo.GetSettings(c.Request.Context())
+	targets := alert.ResolveTelegramTargets(inst, setting)
+	if len(targets) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Belum ada konfigurasi Telegram yang aktif atau alert dinonaktifkan untuk lembaga ini."})
+		return
+	}
+
+	testMsg := fmt.Sprintf("🔔 *TEST NOTIFIKASI MONITORING*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Konfigurasi bot Telegram lembaga ini berhasil terhubung dan siap menerima notifikasi alert!_",
+		inst.Name, time.Now().Format("02 Jan 2006 15:04:05"))
+
+	successCount := 0
+	var lastErr error
+	for _, target := range targets {
+		_, err := services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, testMsg)
+		if err == nil {
+			successCount++
+		} else {
+			lastErr = err
+			log.Printf("Failed to send test alert to target %+v: %v", target, err)
+		}
+	}
+
+	if successCount == 0 {
+		errMsg := "Gagal mengirim pesan ke Telegram. Pastikan Bot Token, Chat ID, dan Topic ID benar serta bot telah ditambahkan ke grup."
+		if lastErr != nil {
+			errMsg = fmt.Sprintf("%s (Error: %v)", errMsg, lastErr)
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("Berhasil mengirim test notifikasi ke %d tujuan Telegram.", successCount),
+	})
 }
 
 // DeleteInstitution handles DELETE /institutions/:id.

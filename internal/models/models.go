@@ -14,6 +14,14 @@ type Institution struct {
 	LastPing     *time.Time    `json:"last_ping" bson:"last_ping,omitempty"`
 	HardwareInfo *HardwareInfo `json:"hardware_info" bson:"hardware_info,omitempty" gorm:"serializer:json"`
 	Services     []Service     `json:"services" bson:"services,omitempty" gorm:"foreignKey:InstitutionID;references:ID"`
+
+	// Telegram Alert Configurations per Institution
+	UseCustomTelegram    bool   `json:"use_custom_telegram" bson:"use_custom_telegram" gorm:"default:false"`
+	TelegramBotToken     string `json:"telegram_bot_token" bson:"telegram_bot_token" gorm:"default:''"`
+	TelegramChatID       string `json:"telegram_chat_id" bson:"telegram_chat_id" gorm:"default:''"`
+	TelegramTopicID      string `json:"telegram_topic_id" bson:"telegram_topic_id" gorm:"default:''"`
+	EnableTelegramAlerts bool   `json:"enable_telegram_alerts" bson:"enable_telegram_alerts" gorm:"default:true"`
+	MirrorToGlobal       bool   `json:"mirror_to_global" bson:"mirror_to_global" gorm:"default:false"`
 }
 
 // HardwareInfo represents the server health metrics of a node.
