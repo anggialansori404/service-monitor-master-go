@@ -83,4 +83,12 @@ type Repository interface {
 	// Schedule
 	ScheduleRepo() ScheduleRepository
 	PurgeScheduleRuns(ctx context.Context, olderThan time.Time) (int64, error)
+
+	// Incident & Uptime
+	CreateIncident(ctx context.Context, inc *models.IncidentLog) error
+	ResolveActiveIncident(ctx context.Context, instID, serviceName, incType string, resolvedAt time.Time, resolvedByAuto bool) (*models.IncidentLog, error)
+	GetIncidentsByInstitution(ctx context.Context, instID string, limit int) ([]models.IncidentLog, error)
+	GetUptimeStats(ctx context.Context, instID string, days int) (*models.UptimeResponse, error)
+	GetRecentIncidentsCount(ctx context.Context, since time.Time) (int64, error)
+	PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error)
 }

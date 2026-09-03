@@ -281,6 +281,8 @@ func (r *MongoRepository) UpdateInstitution(inst *models.Institution) error {
 		"telegram_topic_id":      inst.TelegramTopicID,
 		"enable_telegram_alerts": inst.EnableTelegramAlerts,
 		"mirror_to_global":       inst.MirrorToGlobal,
+		"in_maintenance":         inst.InMaintenance,
+		"maintenance_until":      inst.MaintenanceUntil,
 	}
 
 	coll := r.db.Collection("institutions")
@@ -1095,6 +1097,8 @@ func (r *MongoRepository) GetSettings(ctx context.Context) (*models.GlobalSettin
 		TelegramChatID       string      `bson:"telegram_chat_id"`
 		TelegramTopicID      string      `bson:"telegram_topic_id"`
 		EnableTelegramAlerts bool        `bson:"enable_telegram_alerts"`
+		EnableDailyDigest    bool        `bson:"enable_daily_digest"`
+		DailyDigestTime      string      `bson:"daily_digest_time"`
 		UpdatedAt            time.Time   `bson:"updated_at"`
 	}
 	err := r.db.Collection("settings").FindOne(ctx, bson.M{}).Decode(&doc)
@@ -1116,6 +1120,8 @@ func (r *MongoRepository) GetSettings(ctx context.Context) (*models.GlobalSettin
 		TelegramChatID:       doc.TelegramChatID,
 		TelegramTopicID:      doc.TelegramTopicID,
 		EnableTelegramAlerts: doc.EnableTelegramAlerts,
+		EnableDailyDigest:    doc.EnableDailyDigest,
+		DailyDigestTime:      doc.DailyDigestTime,
 		UpdatedAt:            doc.UpdatedAt,
 	}
 	return &setting, nil
@@ -1128,6 +1134,8 @@ func (r *MongoRepository) UpdateSettings(ctx context.Context, setting *models.Gl
 			"telegram_chat_id":       setting.TelegramChatID,
 			"telegram_topic_id":      setting.TelegramTopicID,
 			"enable_telegram_alerts": setting.EnableTelegramAlerts,
+			"enable_daily_digest":    setting.EnableDailyDigest,
+			"daily_digest_time":      setting.DailyDigestTime,
 			"updated_at":             setting.UpdatedAt,
 		},
 	}
@@ -1345,4 +1353,182 @@ func (r *MongoRepository) PurgeScheduleRuns(ctx context.Context, olderThan time.
 		return 0, err
 	}
 	return res.DeletedCount, nil
+}
+
+// CreateIncident records a new incident in MongoDB.
+func (r *MongoRepository) CreateIncident(ctx context.Context, inc *models.IncidentLog) error {
+	if inc.ID == "" {
+		inc.ID = bson.NewObjectID().Hex()
+	}
+	if inc.CreatedAt.IsZero() {
+		inc.CreatedAt = time.Now()
+	}
+	coll := r.db.Collection("incidents")
+	_, err := coll.InsertOne(ctx, inc)
+	return err
+}
+
+// ResolveActiveIncident resolves an open incident for an institution service/node.
+func (r *MongoRepository) ResolveActiveIncident(ctx context.Context, instID, serviceName, incType string, resolvedAt time.Time, resolvedByAuto bool) (*models.IncidentLog, error) {
+	coll := r.db.Collection("incidents")
+	filter := bson.M{
+		"institution_id": instID,
+		"type":           incType,
+		"resolved_at":    nil,
+	}
+	if serviceName != "" {
+		filter["service_name"] = serviceName
+	}
+	opts := options.FindOne().SetSort(bson.M{"started_at": -1})
+	var inc models.IncidentLog
+	err := coll.FindOne(ctx, filter, opts).Decode(&inc)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	inc.ResolvedAt = &resolvedAt
+	inc.ResolvedByAuto = resolvedByAuto
+	inc.DurationSec = int64(resolvedAt.Sub(inc.StartedAt).Seconds())
+	if inc.DurationSec < 0 {
+		inc.DurationSec = 0
+	}
+
+	objID, _ := parseObjectID(inc.ID)
+	updateFilter := bson.M{"$or": []bson.M{{"_id": inc.ID}, {"_id": objID}}}
+	updateDoc := bson.M{"$set": bson.M{
+		"resolved_at":      inc.ResolvedAt,
+		"resolved_by_auto": inc.ResolvedByAuto,
+		"duration_sec":     inc.DurationSec,
+	}}
+	_, err = coll.UpdateOne(ctx, updateFilter, updateDoc)
+	if err != nil {
+		return nil, err
+	}
+	return &inc, nil
+}
+
+// GetIncidentsByInstitution retrieves recent incidents for an institution.
+func (r *MongoRepository) GetIncidentsByInstitution(ctx context.Context, instID string, limit int) ([]models.IncidentLog, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	coll := r.db.Collection("incidents")
+	opts := options.Find().SetSort(bson.M{"started_at": -1}).SetLimit(int64(limit))
+	cur, err := coll.Find(ctx, bson.M{"institution_id": instID}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+
+	var list []models.IncidentLog
+	if err := cur.All(ctx, &list); err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []models.IncidentLog{}
+	}
+	return list, nil
+}
+
+// GetRecentIncidentsCount returns count of incidents started since a timestamp.
+func (r *MongoRepository) GetRecentIncidentsCount(ctx context.Context, since time.Time) (int64, error) {
+	coll := r.db.Collection("incidents")
+	return coll.CountDocuments(ctx, bson.M{"started_at": bson.M{"$gte": since}})
+}
+
+// PurgeIncidents deletes incident logs older than a cutoff date.
+func (r *MongoRepository) PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error) {
+	coll := r.db.Collection("incidents")
+	res, err := coll.DeleteMany(ctx, bson.M{"started_at": bson.M{"$lt": olderThan}})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
+// GetUptimeStats calculates daily uptime percentage and incidents count over specified days.
+func (r *MongoRepository) GetUptimeStats(ctx context.Context, instID string, days int) (*models.UptimeResponse, error) {
+	if days <= 0 {
+		days = 30
+	}
+	now := time.Now().UTC()
+	startDate := now.AddDate(0, 0, -days)
+
+	coll := r.db.Collection("incidents")
+	cur, err := coll.Find(ctx, bson.M{
+		"institution_id": instID,
+		"started_at":     bson.M{"$gte": startDate},
+	})
+	var incidents []models.IncidentLog
+	if err == nil {
+		_ = cur.All(ctx, &incidents)
+		cur.Close(ctx)
+	}
+
+	buckets := make([]models.UptimeDayBucket, days)
+	var totalDowntimeSec int64
+
+	for i := 0; i < days; i++ {
+		dayDate := now.AddDate(0, 0, -(days - 1 - i))
+		dateStr := dayDate.Format("2006-01-02")
+		startOfDay := time.Date(dayDate.Year(), dayDate.Month(), dayDate.Day(), 0, 0, 0, 0, time.UTC)
+		endOfDay := startOfDay.Add(24 * time.Hour)
+
+		var dayIncidents int
+		var dayDowntimeSec int64
+
+		for _, inc := range incidents {
+			incStart := inc.StartedAt
+			incEnd := now
+			if inc.ResolvedAt != nil {
+				incEnd = *inc.ResolvedAt
+			}
+			if incStart.Before(endOfDay) && incEnd.After(startOfDay) {
+				dayIncidents++
+				overlapStart := incStart
+				if overlapStart.Before(startOfDay) {
+					overlapStart = startOfDay
+				}
+				overlapEnd := incEnd
+				if overlapEnd.After(endOfDay) {
+					overlapEnd = endOfDay
+				}
+				overlapSec := int64(overlapEnd.Sub(overlapStart).Seconds())
+				if overlapSec > 0 {
+					dayDowntimeSec += overlapSec
+				}
+			}
+		}
+
+		if dayDowntimeSec > 86400 {
+			dayDowntimeSec = 86400
+		}
+		uptimePct := 100.0 - (float64(dayDowntimeSec) / 86400.0 * 100.0)
+		if uptimePct < 0 {
+			uptimePct = 0
+		}
+
+		buckets[i] = models.UptimeDayBucket{
+			Date:          dateStr,
+			UptimePercent: float64(int(uptimePct*100)) / 100,
+			Incidents:     dayIncidents,
+			DowntimeSec:   dayDowntimeSec,
+		}
+		totalDowntimeSec += dayDowntimeSec
+	}
+
+	totalSeconds := int64(days) * 86400
+	overallUptime := 100.0 - (float64(totalDowntimeSec) / float64(totalSeconds) * 100.0)
+	if overallUptime < 0 {
+		overallUptime = 0
+	}
+
+	return &models.UptimeResponse{
+		SLAPercentage: float64(int(overallUptime*100)) / 100,
+		TotalDays:     days,
+		Days:          buckets,
+	}, nil
 }

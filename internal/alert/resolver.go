@@ -2,6 +2,7 @@ package alert
 
 import (
 	"strings"
+	"time"
 
 	"monitoring-master/internal/models"
 )
@@ -33,6 +34,11 @@ func ResolveTelegramTargets(inst *models.Institution, global *models.GlobalSetti
 			})
 		}
 		return targets
+	}
+
+	// 0. If institution is in active maintenance mode, suppress all alerts
+	if inst.InMaintenance && (inst.MaintenanceUntil == nil || time.Now().Before(*inst.MaintenanceUntil)) {
+		return nil
 	}
 
 	// 1. If institution uses custom Telegram

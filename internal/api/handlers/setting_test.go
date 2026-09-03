@@ -100,6 +100,22 @@ func (m *mockSettingRepo) BlacklistIP(_ context.Context, _ string, _ string) err
 func (m *mockSettingRepo) IsIPBlacklisted(_ context.Context, _ string) (bool, error)     { return false, nil }
 func (m *mockSettingRepo) GetBlacklistedIPs(_ context.Context) ([]string, error)          { return nil, nil }
 func (m *mockSettingRepo) ScheduleRepo() repository.ScheduleRepository                  { return nil }
+func (m *mockSettingRepo) CreateIncident(_ context.Context, _ *models.IncidentLog) error { return nil }
+func (m *mockSettingRepo) ResolveActiveIncident(_ context.Context, _, _, _ string, _ time.Time, _ bool) (*models.IncidentLog, error) {
+	return nil, nil
+}
+func (m *mockSettingRepo) GetIncidentsByInstitution(_ context.Context, _ string, _ int) ([]models.IncidentLog, error) {
+	return nil, nil
+}
+func (m *mockSettingRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*models.UptimeResponse, error) {
+	return &models.UptimeResponse{SLAPercentage: 100.0, TotalDays: 30, Days: []models.UptimeDayBucket{}}, nil
+}
+func (m *mockSettingRepo) GetRecentIncidentsCount(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+func (m *mockSettingRepo) PurgeIncidents(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
 
 func TestSettingHandler_PurgeLogs(t *testing.T) {
 	gin.SetMode(gin.TestMode)

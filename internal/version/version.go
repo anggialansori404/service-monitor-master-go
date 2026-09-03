@@ -12,7 +12,7 @@ import (
 
 // Version info variables (can be overridden during build with -ldflags)
 var (
-	Version   = "v1.2.1"
+	Version   = "v1.2.2"
 	AppName   = "Service Monitor Master"
 	BuildTime = ""
 	GitCommit = ""

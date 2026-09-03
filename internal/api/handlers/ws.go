@@ -83,6 +83,9 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	go client.StartWritePump()
 	log.Printf("agent connected: %s (institution: %s)", agentID, institution.Name)
 
+	// Resolve active node_offline incident if any
+	_, _ = h.Repo.ResolveActiveIncident(context.Background(), instID, "node-agent", "node_offline", time.Now(), false)
+
 	// On reconnect, edit ALL previous "disconnected" Telegram messages to "recovered"
 	if targetMsgs, ok := h.disconnectMsgIDs[instID]; ok && len(targetMsgs) > 0 {
 		recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\n\nNode Agent kembali tersambung!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Sistem kembali normal._",
@@ -105,6 +108,23 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 		// TRIGGER TELEGRAM ALERT — track message_id for later edit across all resolved targets
 		alertMsg := fmt.Sprintf("🔴 *CRITICAL ALERT*\n\nNode Agent terputus (Offline)!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Mohon segera periksa server/VPS lembaga terkait._",
 			institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
+
+		// Refresh institution in case maintenance mode was enabled while agent was connected
+		if freshInst, err := h.Repo.GetInstitutionByID(instID); err == nil && freshInst != nil {
+			institution = freshInst
+		}
+
+		// Record node_offline incident unless in active maintenance
+		if !institution.InMaintenance || (institution.MaintenanceUntil != nil && time.Now().After(*institution.MaintenanceUntil)) {
+			_ = h.Repo.CreateIncident(context.Background(), &models.IncidentLog{
+				InstitutionID: instID,
+				ServiceName:   "node-agent",
+				Type:          "node_offline",
+				StartedAt:     time.Now(),
+				Cause:         "Agent disconnected",
+				CreatedAt:     time.Now(),
+			})
+		}
 
 		setting, _ := h.Repo.GetSettings(context.Background())
 		targets := alert.ResolveTelegramTargets(institution, setting)

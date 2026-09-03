@@ -18,6 +18,7 @@ import (
 	"monitoring-master/internal/cleanup"
 	"monitoring-master/internal/config"
 	"monitoring-master/internal/database"
+	"monitoring-master/internal/digest"
 	"monitoring-master/internal/logutil"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
@@ -153,6 +154,7 @@ func main() {
 			&models.BlacklistedIP{},
 			&models.Schedule{},
 			&models.ScheduleRun{},
+			&models.IncidentLog{},
 		)
 		if err != nil {
 			log.Fatalf("failed to auto-migrate database: %v", err)
@@ -222,6 +224,37 @@ func main() {
 	// --- Log Retention Daily Cleanup Worker ---
 	cleanup.StartDailyCleanup(repo, cfg)
 
+	// --- Daily Health Digest Scheduled Worker ---
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		var lastSentDate string
+		for range ticker.C {
+			now := time.Now().Local()
+			todayDate := now.Format("2006-01-02")
+			currentTimeStr := now.Format("15:04")
+
+			settings, err := repo.GetSettings(context.Background())
+			if err != nil || settings == nil || !settings.EnableDailyDigest {
+				continue
+			}
+
+			digestTime := settings.DailyDigestTime
+			if digestTime == "" {
+				digestTime = "08:00"
+			}
+
+			if currentTimeStr == digestTime && lastSentDate != todayDate {
+				lastSentDate = todayDate
+				log.Printf("[DAILY DIGEST] Triggering scheduled daily digest at %s...", currentTimeStr)
+				if err := digest.SendDailyDigest(context.Background(), repo); err != nil {
+					log.Printf("[DAILY DIGEST ERROR] Failed to send scheduled digest: %v", err)
+				}
+			}
+		}
+	}()
+
 	// --- Handlers ---
 	agentHandler := handlers.NewAgentHandler(repo, alertManager)
 	frontendHandler := handlers.NewFrontendHandler(repo, registry, cfg.JWTSecret, cfg.CaptchaSecret)
@@ -265,6 +298,7 @@ func main() {
 		protectedGroup.GET("/settings", settingHandler.GetSettings)
 		protectedGroup.POST("/settings", settingHandler.UpdateSettings)
 		protectedGroup.POST("/settings/test-alert", settingHandler.TestAlert)
+		protectedGroup.POST("/settings/test-daily-digest", settingHandler.TestDailyDigest)
 		protectedGroup.GET("/security-logs", settingHandler.GetSecurityLogs)
 		protectedGroup.POST("/settings/purge-logs", settingHandler.PurgeLogs)
 	}
@@ -283,6 +317,9 @@ func main() {
 		institutionsGroup.POST("/:id/regenerate-keys", frontendHandler.RegenerateKeys)
 		institutionsGroup.GET("/:id/credentials", frontendHandler.GetInstitutionCredentials)
 		institutionsGroup.POST("/:id/test-alert", frontendHandler.TestInstitutionAlert)
+		institutionsGroup.POST("/:id/maintenance", frontendHandler.SetMaintenanceMode)
+		institutionsGroup.GET("/:id/uptime", frontendHandler.GetInstitutionUptime)
+		institutionsGroup.GET("/:id/incidents", frontendHandler.GetInstitutionIncidents)
 	}
 
 	// Schedule endpoints (JWT-protected)

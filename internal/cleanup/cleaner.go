@@ -111,6 +111,20 @@ func RunDailyCleanup(ctx context.Context, repo repository.Repository, cfg *confi
 		}
 	}
 
+	// Incident Logs retention (uses AuditLogRetentionDays or 30 days default)
+	incidentRetention := cfg.AuditLogRetentionDays
+	if incidentRetention <= 0 {
+		incidentRetention = 30
+	}
+	cutoffInc := time.Now().AddDate(0, 0, -incidentRetention)
+	countInc, err := repo.PurgeIncidents(ctx, cutoffInc)
+	if err != nil {
+		log.Printf("[CLEANUP ERROR] Failed to purge incident logs older than %d days: %v", incidentRetention, err)
+	} else if countInc > 0 {
+		log.Printf("[CLEANUP] Purged %d incident logs older than %d days", countInc, incidentRetention)
+		totalDeleted += countInc
+	}
+
 	log.Printf("[CLEANUP] Daily log retention cleanup finished. Total deleted records: %d", totalDeleted)
 }
 

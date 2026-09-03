@@ -197,6 +197,22 @@ func (m *mockRepo) GetBlacklistedIPs(_ context.Context) ([]string, error)       
 func (m *mockRepo) PurgeAuditLogs(_ context.Context, _ time.Time) (int64, error)   { return 0, nil }
 func (m *mockRepo) PurgeSecurityLogs(_ context.Context, _ time.Time) (int64, error) { return 0, nil }
 func (m *mockRepo) PurgeScheduleRuns(_ context.Context, _ time.Time) (int64, error) { return 0, nil }
+func (m *mockRepo) CreateIncident(_ context.Context, _ *models.IncidentLog) error { return nil }
+func (m *mockRepo) ResolveActiveIncident(_ context.Context, _, _, _ string, _ time.Time, _ bool) (*models.IncidentLog, error) {
+	return nil, nil
+}
+func (m *mockRepo) GetIncidentsByInstitution(_ context.Context, _ string, _ int) ([]models.IncidentLog, error) {
+	return nil, nil
+}
+func (m *mockRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*models.UptimeResponse, error) {
+	return &models.UptimeResponse{SLAPercentage: 100.0, TotalDays: 30, Days: []models.UptimeDayBucket{}}, nil
+}
+func (m *mockRepo) GetRecentIncidentsCount(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+func (m *mockRepo) PurgeIncidents(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
 
 // --- Mock Scheduler ---
 

@@ -122,6 +122,22 @@ func (m *mockInstRepo) ScheduleRepo() repository.ScheduleRepository             
 func (m *mockInstRepo) PurgeScheduleRuns(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }
+func (m *mockInstRepo) CreateIncident(_ context.Context, _ *models.IncidentLog) error { return nil }
+func (m *mockInstRepo) ResolveActiveIncident(_ context.Context, _, _, _ string, _ time.Time, _ bool) (*models.IncidentLog, error) {
+	return nil, nil
+}
+func (m *mockInstRepo) GetIncidentsByInstitution(_ context.Context, _ string, _ int) ([]models.IncidentLog, error) {
+	return nil, nil
+}
+func (m *mockInstRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*models.UptimeResponse, error) {
+	return &models.UptimeResponse{SLAPercentage: 100.0, TotalDays: 30, Days: []models.UptimeDayBucket{}}, nil
+}
+func (m *mockInstRepo) GetRecentIncidentsCount(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+func (m *mockInstRepo) PurgeIncidents(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
 
 func TestCreateAndUpdateInstitutionTelegramFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)

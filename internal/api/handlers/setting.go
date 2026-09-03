@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"monitoring-master/internal/cleanup"
+	"monitoring-master/internal/digest"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 
@@ -50,6 +51,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		"telegram_chat_id":        setting.TelegramChatID,
 		"telegram_topic_id":       setting.TelegramTopicID,
 		"enable_telegram_alerts":  setting.EnableTelegramAlerts,
+		"enable_daily_digest":     setting.EnableDailyDigest,
+		"daily_digest_time":       setting.DailyDigestTime,
 		"updated_at":              setting.UpdatedAt,
 	})
 }
@@ -61,6 +64,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TelegramChatID       string `json:"telegram_chat_id"`
 		TelegramTopicID      string `json:"telegram_topic_id"`
 		EnableTelegramAlerts bool   `json:"enable_telegram_alerts"`
+		EnableDailyDigest    bool   `json:"enable_daily_digest"`
+		DailyDigestTime      string `json:"daily_digest_time"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -74,11 +79,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 
+	if input.DailyDigestTime == "" {
+		input.DailyDigestTime = "08:00"
+	}
+
 	setting := models.GlobalSetting{
 		TelegramBotToken:     input.TelegramBotToken,
 		TelegramChatID:       input.TelegramChatID,
 		TelegramTopicID:      input.TelegramTopicID,
 		EnableTelegramAlerts: input.EnableTelegramAlerts,
+		EnableDailyDigest:    input.EnableDailyDigest,
+		DailyDigestTime:      input.DailyDigestTime,
 		UpdatedAt:            time.Now(),
 	}
 
@@ -128,6 +139,16 @@ func (h *SettingHandler) TestAlert(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Test alert sent successfully"})
+}
+
+// TestDailyDigest triggers an immediate test run of the daily health digest.
+func (h *SettingHandler) TestDailyDigest(c *gin.Context) {
+	err := digest.SendDailyDigest(c.Request.Context(), h.Repo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Gagal mengirim daily digest: %v", err)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Laporan harian (Daily Digest) berhasil dikirim ke Telegram."})
 }
 
 // GetSecurityLogs returns paginated security logs.

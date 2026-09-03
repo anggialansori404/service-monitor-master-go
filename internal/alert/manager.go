@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 	"monitoring-master/internal/services"
 )
@@ -139,6 +140,9 @@ func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
 
 	m.mu.Unlock()
 
+	// Resolve open incident for this service
+	_, _ = m.repo.ResolveActiveIncident(ctx, event.InstitutionID, event.ServiceName, "service_down", event.Timestamp, false)
+
 	if hasBatch {
 		// Edit the existing batch Telegram message
 		m.editBatchOnRecovery(ctx, instID, bs, event)
@@ -257,6 +261,16 @@ func (m *Manager) processTimeout(ctx context.Context, key string) {
 
 	if len(servicesDown) > 0 {
 		log.Printf("Alert Timer fired for %s (%d services down). Triggering notification protocol.", key, len(servicesDown))
+		for _, ev := range servicesDown {
+			_ = m.repo.CreateIncident(ctx, &models.IncidentLog{
+				InstitutionID: ev.InstitutionID,
+				ServiceName:   ev.ServiceName,
+				Type:          "service_down",
+				StartedAt:     ev.Timestamp,
+				Cause:         ev.Message,
+				CreatedAt:     time.Now(),
+			})
+		}
 		m.sendBatchedAlert(ctx, instID, servicesDown)
 	}
 }

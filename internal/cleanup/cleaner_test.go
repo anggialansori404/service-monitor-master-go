@@ -101,6 +101,22 @@ func (m *mockCleanupRepo) BlacklistIP(_ context.Context, _ string, _ string) err
 func (m *mockCleanupRepo) IsIPBlacklisted(_ context.Context, _ string) (bool, error)     { return false, nil }
 func (m *mockCleanupRepo) GetBlacklistedIPs(_ context.Context) ([]string, error)          { return nil, nil }
 func (m *mockCleanupRepo) ScheduleRepo() repository.ScheduleRepository                  { return nil }
+func (m *mockCleanupRepo) CreateIncident(_ context.Context, _ *models.IncidentLog) error { return nil }
+func (m *mockCleanupRepo) ResolveActiveIncident(_ context.Context, _, _, _ string, _ time.Time, _ bool) (*models.IncidentLog, error) {
+	return nil, nil
+}
+func (m *mockCleanupRepo) GetIncidentsByInstitution(_ context.Context, _ string, _ int) ([]models.IncidentLog, error) {
+	return nil, nil
+}
+func (m *mockCleanupRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*models.UptimeResponse, error) {
+	return nil, nil
+}
+func (m *mockCleanupRepo) GetRecentIncidentsCount(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+func (m *mockCleanupRepo) PurgeIncidents(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
 
 func TestExecutePurge(t *testing.T) {
 	repo := &mockCleanupRepo{

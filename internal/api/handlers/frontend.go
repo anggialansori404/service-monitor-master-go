@@ -711,6 +711,125 @@ func (h *FrontendHandler) TestInstitutionAlert(c *gin.Context) {
 	})
 }
 
+type setMaintenanceModeReq struct {
+	Enabled         bool `json:"enabled"`
+	DurationMinutes int  `json:"duration_minutes"` // e.g. 30, 60, 120; 0 means indefinite until manual disable
+}
+
+// SetMaintenanceMode handles POST /institutions/:id/maintenance.
+// Enables or disables maintenance mode with optional duration.
+func (h *FrontendHandler) SetMaintenanceMode(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid institution id"})
+		return
+	}
+
+	var req setMaintenanceModeReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	inst, err := h.Repo.GetInstitutionByID(id)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "institution not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
+	inst.InMaintenance = req.Enabled
+	if req.Enabled && req.DurationMinutes > 0 {
+		until := time.Now().Add(time.Duration(req.DurationMinutes) * time.Minute)
+		inst.MaintenanceUntil = &until
+	} else {
+		inst.MaintenanceUntil = nil
+	}
+
+	if err := h.Repo.UpdateInstitution(inst); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update maintenance mode"})
+		return
+	}
+
+	// Audit log
+	action := "DISABLE_MAINTENANCE_MODE"
+	details := fmt.Sprintf("Disabled maintenance mode for %s", inst.Name)
+	if req.Enabled {
+		action = "ENABLE_MAINTENANCE_MODE"
+		if inst.MaintenanceUntil != nil {
+			details = fmt.Sprintf("Enabled maintenance mode for %s until %s (%d mins)", inst.Name, inst.MaintenanceUntil.Format(time.RFC3339), req.DurationMinutes)
+		} else {
+			details = fmt.Sprintf("Enabled indefinite maintenance mode for %s", inst.Name)
+		}
+	}
+	_ = h.Repo.CreateAuditLog(c.Request.Context(), &models.AuditLog{
+		InstitutionID: inst.ID,
+		Action:        action,
+		Status:        "SUCCESS",
+		TriggeredBy:   c.GetString("userEmail"),
+		Details:       details,
+		Timestamp:     time.Now(),
+		CreatedAt:     time.Now(),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":           "Maintenance mode updated successfully",
+		"in_maintenance":    inst.InMaintenance,
+		"maintenance_until": inst.MaintenanceUntil,
+	})
+}
+
+// GetInstitutionUptime handles GET /institutions/:id/uptime.
+// Returns SLA percentage and daily uptime buckets for visual uptime bars.
+func (h *FrontendHandler) GetInstitutionUptime(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid institution id"})
+		return
+	}
+
+	daysStr := c.DefaultQuery("days", "30")
+	days, err := strconv.Atoi(daysStr)
+	if err != nil || days <= 0 || days > 90 {
+		days = 30
+	}
+
+	res, err := h.Repo.GetUptimeStats(c.Request.Context(), id, days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to calculate uptime stats"})
+		return
+	}
+
+	c.JSON(http.StatusOK, res)
+}
+
+// GetInstitutionIncidents handles GET /institutions/:id/incidents.
+// Returns list of recent downtime incidents for an institution.
+func (h *FrontendHandler) GetInstitutionIncidents(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid institution id"})
+		return
+	}
+
+	limitStr := c.DefaultQuery("limit", "50")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+
+	incidents, err := h.Repo.GetIncidentsByInstitution(c.Request.Context(), id, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch incidents"})
+		return
+	}
+
+	c.JSON(http.StatusOK, incidents)
+}
+
 // DeleteInstitution handles DELETE /institutions/:id.
 // Deletes an institution and its associated data.
 func (h *FrontendHandler) DeleteInstitution(c *gin.Context) {

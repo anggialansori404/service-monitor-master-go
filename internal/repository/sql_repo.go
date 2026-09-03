@@ -604,7 +604,10 @@ func (r *SQLRepository) UpdateSettings(ctx context.Context, setting *models.Glob
 
 	existing.TelegramBotToken = setting.TelegramBotToken
 	existing.TelegramChatID = setting.TelegramChatID
+	existing.TelegramTopicID = setting.TelegramTopicID
 	existing.EnableTelegramAlerts = setting.EnableTelegramAlerts
+	existing.EnableDailyDigest = setting.EnableDailyDigest
+	existing.DailyDigestTime = setting.DailyDigestTime
 	existing.UpdatedAt = time.Now().Local()
 
 	return r.db.WithContext(ctx).Save(&existing).Error
@@ -750,4 +753,142 @@ func (r *SQLRepository) UpdateScheduleRunTimes(ctx context.Context, scheduleID s
 func (r *SQLRepository) PurgeScheduleRuns(ctx context.Context, olderThan time.Time) (int64, error) {
 	db := r.db.WithContext(ctx).Where("created_at < ? OR run_at < ?", olderThan, olderThan).Delete(&models.ScheduleRun{})
 	return db.RowsAffected, db.Error
+}
+
+// CreateIncident records a new incident in SQL database.
+func (r *SQLRepository) CreateIncident(ctx context.Context, inc *models.IncidentLog) error {
+	if inc.ID == "" {
+		inc.ID = generateID()
+	}
+	if inc.CreatedAt.IsZero() {
+		inc.CreatedAt = time.Now()
+	}
+	return r.db.WithContext(ctx).Create(inc).Error
+}
+
+// ResolveActiveIncident resolves an open incident for an institution service/node.
+func (r *SQLRepository) ResolveActiveIncident(ctx context.Context, instID, serviceName, incType string, resolvedAt time.Time, resolvedByAuto bool) (*models.IncidentLog, error) {
+	var inc models.IncidentLog
+	query := r.db.WithContext(ctx).Where("institution_id = ? AND type = ? AND resolved_at IS NULL", instID, incType)
+	if serviceName != "" {
+		query = query.Where("service_name = ?", serviceName)
+	}
+	err := query.Order("started_at desc").First(&inc).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil // No open incident
+		}
+		return nil, err
+	}
+
+	inc.ResolvedAt = &resolvedAt
+	inc.ResolvedByAuto = resolvedByAuto
+	inc.DurationSec = int64(resolvedAt.Sub(inc.StartedAt).Seconds())
+	if inc.DurationSec < 0 {
+		inc.DurationSec = 0
+	}
+
+	if err := r.db.WithContext(ctx).Save(&inc).Error; err != nil {
+		return nil, err
+	}
+	return &inc, nil
+}
+
+// GetIncidentsByInstitution retrieves recent incidents for an institution.
+func (r *SQLRepository) GetIncidentsByInstitution(ctx context.Context, instID string, limit int) ([]models.IncidentLog, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var logs []models.IncidentLog
+	err := r.db.WithContext(ctx).Where("institution_id = ?", instID).Order("started_at desc").Limit(limit).Find(&logs).Error
+	return logs, err
+}
+
+// GetRecentIncidentsCount returns count of incidents started since a timestamp.
+func (r *SQLRepository) GetRecentIncidentsCount(ctx context.Context, since time.Time) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.IncidentLog{}).Where("started_at >= ?", since).Count(&count).Error
+	return count, err
+}
+
+// PurgeIncidents deletes incident logs older than a cutoff date.
+func (r *SQLRepository) PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error) {
+	result := r.db.WithContext(ctx).Where("started_at < ?", olderThan).Delete(&models.IncidentLog{})
+	return result.RowsAffected, result.Error
+}
+
+// GetUptimeStats calculates daily uptime percentage and incidents count over specified days.
+func (r *SQLRepository) GetUptimeStats(ctx context.Context, instID string, days int) (*models.UptimeResponse, error) {
+	if days <= 0 {
+		days = 30
+	}
+	now := time.Now().UTC()
+	startDate := now.AddDate(0, 0, -days)
+
+	var incidents []models.IncidentLog
+	_ = r.db.WithContext(ctx).Where("institution_id = ? AND started_at >= ?", instID, startDate).Find(&incidents)
+
+	buckets := make([]models.UptimeDayBucket, days)
+	var totalDowntimeSec int64
+
+	for i := 0; i < days; i++ {
+		dayDate := now.AddDate(0, 0, -(days - 1 - i))
+		dateStr := dayDate.Format("2006-01-02")
+		startOfDay := time.Date(dayDate.Year(), dayDate.Month(), dayDate.Day(), 0, 0, 0, 0, time.UTC)
+		endOfDay := startOfDay.Add(24 * time.Hour)
+
+		var dayIncidents int
+		var dayDowntimeSec int64
+
+		for _, inc := range incidents {
+			incStart := inc.StartedAt
+			incEnd := now
+			if inc.ResolvedAt != nil {
+				incEnd = *inc.ResolvedAt
+			}
+			if incStart.Before(endOfDay) && incEnd.After(startOfDay) {
+				dayIncidents++
+				overlapStart := incStart
+				if overlapStart.Before(startOfDay) {
+					overlapStart = startOfDay
+				}
+				overlapEnd := incEnd
+				if overlapEnd.After(endOfDay) {
+					overlapEnd = endOfDay
+				}
+				overlapSec := int64(overlapEnd.Sub(overlapStart).Seconds())
+				if overlapSec > 0 {
+					dayDowntimeSec += overlapSec
+				}
+			}
+		}
+
+		if dayDowntimeSec > 86400 {
+			dayDowntimeSec = 86400
+		}
+		uptimePct := 100.0 - (float64(dayDowntimeSec) / 86400.0 * 100.0)
+		if uptimePct < 0 {
+			uptimePct = 0
+		}
+
+		buckets[i] = models.UptimeDayBucket{
+			Date:          dateStr,
+			UptimePercent: float64(int(uptimePct*100)) / 100,
+			Incidents:     dayIncidents,
+			DowntimeSec:   dayDowntimeSec,
+		}
+		totalDowntimeSec += dayDowntimeSec
+	}
+
+	totalSeconds := int64(days) * 86400
+	overallUptime := 100.0 - (float64(totalDowntimeSec) / float64(totalSeconds) * 100.0)
+	if overallUptime < 0 {
+		overallUptime = 0
+	}
+
+	return &models.UptimeResponse{
+		SLAPercentage: float64(int(overallUptime*100)) / 100,
+		TotalDays:     days,
+		Days:          buckets,
+	}, nil
 }

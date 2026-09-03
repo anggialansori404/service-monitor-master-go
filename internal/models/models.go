@@ -22,6 +22,10 @@ type Institution struct {
 	TelegramTopicID      string `json:"telegram_topic_id" bson:"telegram_topic_id" gorm:"default:''"`
 	EnableTelegramAlerts bool   `json:"enable_telegram_alerts" bson:"enable_telegram_alerts" gorm:"default:true"`
 	MirrorToGlobal       bool   `json:"mirror_to_global" bson:"mirror_to_global" gorm:"default:false"`
+
+	// Maintenance Mode
+	InMaintenance    bool       `json:"in_maintenance" bson:"in_maintenance" gorm:"default:false"`
+	MaintenanceUntil *time.Time `json:"maintenance_until" bson:"maintenance_until,omitempty"`
 }
 
 // HardwareInfo represents the server health metrics of a node.
@@ -84,6 +88,8 @@ type GlobalSetting struct {
 	TelegramChatID       string    `json:"telegram_chat_id" bson:"telegram_chat_id"`
 	TelegramTopicID      string    `json:"telegram_topic_id" bson:"telegram_topic_id"`
 	EnableTelegramAlerts bool      `json:"enable_telegram_alerts" bson:"enable_telegram_alerts"`
+	EnableDailyDigest    bool      `json:"enable_daily_digest" bson:"enable_daily_digest" gorm:"default:false"`
+	DailyDigestTime      string    `json:"daily_digest_time" bson:"daily_digest_time" gorm:"default:'08:00'"`
 	UpdatedAt            time.Time `json:"updated_at" bson:"updated_at"`
 }
 // SecurityLog records suspicious access attempts.
