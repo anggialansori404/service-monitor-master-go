@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -31,18 +32,58 @@ func parseObjectID(id string) (bson.ObjectID, error) {
 	return bson.ObjectIDFromHex(id)
 }
 
+type mongoInstitutionDoc struct {
+	ID                   interface{}          `bson:"_id"`
+	Name                 string               `bson:"name"`
+	AgentID              string               `bson:"agent_id"`
+	SecretKey            string               `bson:"secret_key"`
+	IsActive             bool                 `bson:"is_active"`
+	LastPing             *time.Time           `bson:"last_ping,omitempty"`
+	HardwareInfo         *models.HardwareInfo `bson:"hardware_info,omitempty"`
+	UseCustomTelegram    bool                 `bson:"use_custom_telegram"`
+	TelegramBotToken     string               `bson:"telegram_bot_token"`
+	TelegramChatID       string               `bson:"telegram_chat_id"`
+	TelegramTopicID      string               `bson:"telegram_topic_id"`
+	EnableTelegramAlerts bool                 `bson:"enable_telegram_alerts"`
+	MirrorToGlobal       bool                 `bson:"mirror_to_global"`
+	InMaintenance        bool                 `bson:"in_maintenance"`
+	MaintenanceUntil     *time.Time           `bson:"maintenance_until,omitempty"`
+}
+
+func (doc *mongoInstitutionDoc) toModel() *models.Institution {
+	var docID string
+	if oid, ok := doc.ID.(bson.ObjectID); ok {
+		docID = oid.Hex()
+	} else if s, ok := doc.ID.(string); ok {
+		docID = s
+	} else if doc.ID != nil {
+		docID = fmt.Sprintf("%v", doc.ID)
+	}
+
+	return &models.Institution{
+		ID:                   docID,
+		Name:                 doc.Name,
+		AgentID:              doc.AgentID,
+		SecretKey:            doc.SecretKey,
+		IsActive:             doc.IsActive,
+		LastPing:             doc.LastPing,
+		HardwareInfo:         doc.HardwareInfo,
+		UseCustomTelegram:    doc.UseCustomTelegram,
+		TelegramBotToken:     doc.TelegramBotToken,
+		TelegramChatID:       doc.TelegramChatID,
+		TelegramTopicID:      doc.TelegramTopicID,
+		EnableTelegramAlerts: doc.EnableTelegramAlerts,
+		MirrorToGlobal:       doc.MirrorToGlobal,
+		InMaintenance:        doc.InMaintenance,
+		MaintenanceUntil:     doc.MaintenanceUntil,
+	}
+}
+
 // --- Institution ---
 
 func (r *MongoRepository) GetInstitutionByAgentID(ctx context.Context, agentID string) (*models.Institution, error) {
 	coll := r.db.Collection("institutions")
-	var doc struct {
-		ID        interface{} `bson:"_id"`
-		Name      string      `bson:"name"`
-		AgentID   string      `bson:"agent_id"`
-		SecretKey string      `bson:"secret_key"`
-		IsActive  bool        `bson:"is_active"`
-		LastPing  *time.Time  `bson:"last_ping,omitempty"`
-	}
+	var doc mongoInstitutionDoc
 	err := coll.FindOne(ctx, bson.M{"agent_id": agentID}).Decode(&doc)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -50,35 +91,13 @@ func (r *MongoRepository) GetInstitutionByAgentID(ctx context.Context, agentID s
 		}
 		return nil, err
 	}
-	var docID string
-	if oid, ok := doc.ID.(bson.ObjectID); ok {
-		docID = oid.Hex()
-	} else if s, ok := doc.ID.(string); ok {
-		docID = s
-	}
-	inst := models.Institution{
-		ID:        docID,
-		Name:      doc.Name,
-		AgentID:   doc.AgentID,
-		SecretKey: doc.SecretKey,
-		IsActive:  doc.IsActive,
-		LastPing:  doc.LastPing,
-	}
-	return &inst, nil
+	return doc.toModel(), nil
 }
 
 func (r *MongoRepository) GetInstitutionByID(id string) (*models.Institution, error) {
 	objID, _ := parseObjectID(id)
 	coll := r.db.Collection("institutions")
-	var doc struct {
-		ID           interface{}          `bson:"_id"`
-		Name         string               `bson:"name"`
-		AgentID      string               `bson:"agent_id"`
-		SecretKey    string               `bson:"secret_key"`
-		IsActive     bool                 `bson:"is_active"`
-		LastPing     *time.Time           `bson:"last_ping,omitempty"`
-		HardwareInfo *models.HardwareInfo `bson:"hardware_info,omitempty"`
-	}
+	var doc mongoInstitutionDoc
 	filter := bson.M{"$or": []bson.M{{"_id": id}, {"_id": objID}}}
 	err := coll.FindOne(context.TODO(), filter).Decode(&doc)
 	if err != nil {
@@ -87,34 +106,12 @@ func (r *MongoRepository) GetInstitutionByID(id string) (*models.Institution, er
 		}
 		return nil, err
 	}
-	var docID string
-	if oid, ok := doc.ID.(bson.ObjectID); ok {
-		docID = oid.Hex()
-	} else if s, ok := doc.ID.(string); ok {
-		docID = s
-	}
-	inst := models.Institution{
-		ID:           docID,
-		Name:         doc.Name,
-		AgentID:      doc.AgentID,
-		SecretKey:    doc.SecretKey,
-		IsActive:     doc.IsActive,
-		LastPing:     doc.LastPing,
-		HardwareInfo: doc.HardwareInfo,
-	}
-	return &inst, nil
+	return doc.toModel(), nil
 }
 
 func (r *MongoRepository) GetInstitutionByName(name string) (*models.Institution, error) {
 	coll := r.db.Collection("institutions")
-	var doc struct {
-		ID        interface{} `bson:"_id"`
-		Name      string      `bson:"name"`
-		AgentID   string      `bson:"agent_id"`
-		SecretKey string      `bson:"secret_key"`
-		IsActive  bool        `bson:"is_active"`
-		LastPing  *time.Time  `bson:"last_ping,omitempty"`
-	}
+	var doc mongoInstitutionDoc
 	err := coll.FindOne(context.TODO(), bson.M{"name": name}).Decode(&doc)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -122,25 +119,11 @@ func (r *MongoRepository) GetInstitutionByName(name string) (*models.Institution
 		}
 		return nil, err
 	}
-	var docID string
-	if oid, ok := doc.ID.(bson.ObjectID); ok {
-		docID = oid.Hex()
-	} else if s, ok := doc.ID.(string); ok {
-		docID = s
-	}
-	inst := models.Institution{
-		ID:        docID,
-		Name:      doc.Name,
-		AgentID:   doc.AgentID,
-		SecretKey: doc.SecretKey,
-		IsActive:  doc.IsActive,
-		LastPing:  doc.LastPing,
-	}
-	return &inst, nil
+	return doc.toModel(), nil
 }
 
 func (r *MongoRepository) GetAllInstitutions() ([]models.Institution, error) {
-	var institutions []models.Institution
+	var docs []mongoInstitutionDoc
 	ctx := context.TODO()
 
 	// 1. Ambil semua Institutions
@@ -150,13 +133,18 @@ func (r *MongoRepository) GetAllInstitutions() ([]models.Institution, error) {
 	}
 	defer cursor.Close(ctx)
 
-	if err = cursor.All(ctx, &institutions); err != nil {
+	if err = cursor.All(ctx, &docs); err != nil {
 		return nil, err
 	}
 
 	// Jika kosong, kembalikan array kosong agar tidak panic
-	if len(institutions) == 0 {
+	if len(docs) == 0 {
 		return []models.Institution{}, nil
+	}
+
+	institutions := make([]models.Institution, len(docs))
+	for i := range docs {
+		institutions[i] = *docs[i].toModel()
 	}
 
 	// 2. Loop dan ambil Services untuk tiap Institution
@@ -691,14 +679,7 @@ func (r *MongoRepository) PurgeSecurityLogs(ctx context.Context, olderThan time.
 
 func (r *MongoRepository) GetInstitutionByAgentIDAndSecret(ctx context.Context, agentID, secretKey string) (*models.Institution, error) {
 	coll := r.db.Collection("institutions")
-	var doc struct {
-		ID        interface{} `bson:"_id"`
-		Name      string      `bson:"name"`
-		AgentID   string      `bson:"agent_id"`
-		SecretKey string      `bson:"secret_key"`
-		IsActive  bool        `bson:"is_active"`
-		LastPing  *time.Time  `bson:"last_ping,omitempty"`
-	}
+	var doc mongoInstitutionDoc
 	err := coll.FindOne(ctx, bson.M{"agent_id": agentID, "secret_key": secretKey}).Decode(&doc)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -706,21 +687,7 @@ func (r *MongoRepository) GetInstitutionByAgentIDAndSecret(ctx context.Context, 
 		}
 		return nil, err
 	}
-	var docID string
-	if oid, ok := doc.ID.(bson.ObjectID); ok {
-		docID = oid.Hex()
-	} else if s, ok := doc.ID.(string); ok {
-		docID = s
-	}
-	inst := models.Institution{
-		ID:        docID,
-		Name:      doc.Name,
-		AgentID:   doc.AgentID,
-		SecretKey: doc.SecretKey,
-		IsActive:  doc.IsActive,
-		LastPing:  doc.LastPing,
-	}
-	return &inst, nil
+	return doc.toModel(), nil
 }
 
 // --- User ---
