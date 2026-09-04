@@ -108,10 +108,7 @@ func (m *Manager) handleDown(ctx context.Context, key string, event AlertEvent) 
 	if !inMaintenance {
 		active, _ := m.repo.GetActiveIncident(ctx, event.InstitutionID, event.ServiceName, "service_down")
 		if active == nil {
-			causeMsg := strings.TrimSpace(event.Message)
-			if causeMsg == "" {
-				causeMsg = "Service stopped / unreachable"
-			}
+			causeMsg := sanitizeCauseMessage(event.Message)
 			_ = m.repo.CreateIncident(ctx, &models.IncidentLog{
 				InstitutionID: event.InstitutionID,
 				ServiceName:   event.ServiceName,
@@ -391,3 +388,18 @@ func (m *Manager) sendDirectAlert(ctx context.Context, event AlertEvent) {
 		_, _ = services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, msg)
 	}
 }
+
+func sanitizeCauseMessage(msg string) string {
+	clean := strings.TrimSpace(msg)
+	if clean == "" {
+		return "Service stopped / unreachable"
+	}
+	if strings.Contains(clean, "exit status 1") && strings.Contains(clean, "(No output from OS)") {
+		return "Process is not running (PID not found)"
+	}
+	if strings.Contains(clean, "exit status") && strings.Contains(clean, "inactive") {
+		return "Service is inactive / stopped"
+	}
+	return clean
+}
+
