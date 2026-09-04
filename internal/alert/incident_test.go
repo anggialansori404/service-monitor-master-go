@@ -18,6 +18,16 @@ func (m *mockIncidentRepo) CreateIncident(_ context.Context, inc *models.Inciden
 	return nil
 }
 
+func (m *mockIncidentRepo) GetActiveIncident(_ context.Context, instID, serviceName, incType string) (*models.IncidentLog, error) {
+	for i := len(m.incidents) - 1; i >= 0; i-- {
+		inc := &m.incidents[i]
+		if inc.InstitutionID == instID && inc.Type == incType && (serviceName == "" || inc.ServiceName == serviceName) && inc.ResolvedAt == nil {
+			return inc, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockIncidentRepo) ResolveActiveIncident(_ context.Context, instID, serviceName, incType string, resolvedAt time.Time, resolvedByAuto bool) (*models.IncidentLog, error) {
 	for i := len(m.incidents) - 1; i >= 0; i-- {
 		inc := &m.incidents[i]
@@ -29,6 +39,31 @@ func (m *mockIncidentRepo) ResolveActiveIncident(_ context.Context, instID, serv
 		}
 	}
 	return nil, nil
+}
+
+func (m *mockIncidentRepo) GetIncidentsByInstitution(_ context.Context, instID string, page, limit int) ([]models.IncidentLog, int64, error) {
+	var filtered []models.IncidentLog
+	for _, inc := range m.incidents {
+		if inc.InstitutionID == instID {
+			filtered = append(filtered, inc)
+		}
+	}
+	total := int64(len(filtered))
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	start := (page - 1) * limit
+	if start >= len(filtered) {
+		return []models.IncidentLog{}, total, nil
+	}
+	end := start + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[start:end], total, nil
 }
 
 func (m *mockIncidentRepo) GetUptimeStats(_ context.Context, instID string, days int) (*models.UptimeResponse, error) {
@@ -164,3 +199,55 @@ func TestIncidentLifecycleAndUptimeCalculation(t *testing.T) {
 		t.Errorf("expected today bucket to have 1 incident and 600s downtime, got %+v", todayBucket)
 	}
 }
+
+func TestIncidentPaginationAndActiveDetection(t *testing.T) {
+	ctx := context.Background()
+	repo := &mockIncidentRepo{}
+	instID := "inst-pagination-test"
+
+	// 1. Create 25 incidents
+	for i := 1; i <= 25; i++ {
+		inc := &models.IncidentLog{
+			InstitutionID: instID,
+			ServiceName:   "nginx",
+			Type:          "service_down",
+			StartedAt:     time.Now().Add(-time.Duration(30-i) * time.Minute),
+			Cause:         "Crash",
+		}
+		_ = repo.CreateIncident(ctx, inc)
+	}
+
+	// 2. Test active detection
+	active, err := repo.GetActiveIncident(ctx, instID, "nginx", "service_down")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if active == nil {
+		t.Fatalf("expected active incident, got nil")
+	}
+
+	// 3. Test pagination page 1 limit 10
+	page1, total, err := repo.GetIncidentsByInstitution(ctx, instID, 1, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total != 25 {
+		t.Errorf("expected total 25, got %d", total)
+	}
+	if len(page1) != 10 {
+		t.Errorf("expected 10 items on page 1, got %d", len(page1))
+	}
+
+	// 4. Test pagination page 3 limit 10 (should have 5 items)
+	page3, total3, err := repo.GetIncidentsByInstitution(ctx, instID, 3, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total3 != 25 {
+		t.Errorf("expected total 25, got %d", total3)
+	}
+	if len(page3) != 5 {
+		t.Errorf("expected 5 items on page 3, got %d", len(page3))
+	}
+}
+

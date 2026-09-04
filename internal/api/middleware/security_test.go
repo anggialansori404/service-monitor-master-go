@@ -118,11 +118,12 @@ func (f *fullMockRepo) GetSettings(_ context.Context) (*models.GlobalSetting, er
 func (f *fullMockRepo) UpdateSettings(_ context.Context, _ *models.GlobalSetting) error { return nil }
 func (f *fullMockRepo) ScheduleRepo() repository.ScheduleRepository                  { return nil }
 func (f *fullMockRepo) CreateIncident(_ context.Context, _ *models.IncidentLog) error { return nil }
+func (f *fullMockRepo) GetActiveIncident(_ context.Context, _, _, _ string) (*models.IncidentLog, error) { return nil, nil }
 func (f *fullMockRepo) ResolveActiveIncident(_ context.Context, _, _, _ string, _ time.Time, _ bool) (*models.IncidentLog, error) {
 	return nil, nil
 }
-func (f *fullMockRepo) GetIncidentsByInstitution(_ context.Context, _ string, _ int) ([]models.IncidentLog, error) {
-	return nil, nil
+func (f *fullMockRepo) GetIncidentsByInstitution(_ context.Context, _ string, _, _ int) ([]models.IncidentLog, int64, error) {
+	return nil, 0, nil
 }
 func (f *fullMockRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*models.UptimeResponse, error) {
 	return &models.UptimeResponse{SLAPercentage: 100.0, TotalDays: 30, Days: []models.UptimeDayBucket{}}, nil

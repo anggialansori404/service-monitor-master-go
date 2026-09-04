@@ -252,7 +252,11 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			}
 
 			for _, svc := range statusChanges {
-				h.AlertMgr.AddEvent(instID, svc.Name, svc.Status, fmt.Sprintf("Reported via WS Sync at %v", now.Format(time.RFC3339)))
+				msg := fmt.Sprintf("Reported via WS Sync at %v", now.Format(time.RFC3339))
+				if svc.Status == "DOWN" {
+					msg = "Service stopped / unreachable"
+				}
+				h.AlertMgr.AddEvent(instID, svc.Name, svc.Status, msg)
 
 				auditLog := models.AuditLog{
 					InstitutionID: instID,
@@ -277,6 +281,13 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			svcName, _ := msgData["service"].(string)
 			status, _ := msgData["status"].(string)
 			msgStr, _ := msgData["message"].(string)
+			if strings.TrimSpace(msgStr) == "" {
+				if strings.ToUpper(strings.TrimSpace(status)) == "DOWN" {
+					msgStr = "Service stopped / unreachable"
+				} else {
+					msgStr = "Service recovered"
+				}
+			}
 
 			h.AlertMgr.AddEvent(instID, svcName, status, msgStr)
 

@@ -816,7 +816,7 @@ func (h *FrontendHandler) GetInstitutionUptime(c *gin.Context) {
 }
 
 // GetInstitutionIncidents handles GET /institutions/:id/incidents.
-// Returns list of recent downtime incidents for an institution.
+// Returns list of recent downtime incidents for an institution with pagination (limit 10).
 func (h *FrontendHandler) GetInstitutionIncidents(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
@@ -824,19 +824,46 @@ func (h *FrontendHandler) GetInstitutionIncidents(c *gin.Context) {
 		return
 	}
 
-	limitStr := c.DefaultQuery("limit", "50")
-	limit, _ := strconv.Atoi(limitStr)
-	if limit <= 0 || limit > 100 {
-		limit = 50
+	page := 1
+	if p := c.Query("page"); p != "" {
+		fmt.Sscanf(p, "%d", &page)
+	}
+	if page < 1 {
+		page = 1
 	}
 
-	incidents, err := h.Repo.GetIncidentsByInstitution(c.Request.Context(), id, limit)
+	limit := 10
+	if l := c.Query("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
+
+	incidents, total, err := h.Repo.GetIncidentsByInstitution(c.Request.Context(), id, page, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch incidents"})
 		return
 	}
 
-	c.JSON(http.StatusOK, incidents)
+	if incidents == nil {
+		incidents = []models.IncidentLog{}
+	}
+
+	totalPages := int(total) / limit
+	if int(total)%limit != 0 || totalPages == 0 {
+		totalPages++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": incidents,
+		"pagination": gin.H{
+			"total_count":  total,
+			"total_pages":  totalPages,
+			"current_page": page,
+			"limit":        limit,
+		},
+	})
 }
 
 // DeleteInstitution handles DELETE /institutions/:id.

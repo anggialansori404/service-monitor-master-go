@@ -101,11 +101,12 @@ func (m *mockSettingRepo) IsIPBlacklisted(_ context.Context, _ string) (bool, er
 func (m *mockSettingRepo) GetBlacklistedIPs(_ context.Context) ([]string, error)          { return nil, nil }
 func (m *mockSettingRepo) ScheduleRepo() repository.ScheduleRepository                  { return nil }
 func (m *mockSettingRepo) CreateIncident(_ context.Context, _ *models.IncidentLog) error { return nil }
+func (m *mockSettingRepo) GetActiveIncident(_ context.Context, _, _, _ string) (*models.IncidentLog, error) { return nil, nil }
 func (m *mockSettingRepo) ResolveActiveIncident(_ context.Context, _, _, _ string, _ time.Time, _ bool) (*models.IncidentLog, error) {
 	return nil, nil
 }
-func (m *mockSettingRepo) GetIncidentsByInstitution(_ context.Context, _ string, _ int) ([]models.IncidentLog, error) {
-	return nil, nil
+func (m *mockSettingRepo) GetIncidentsByInstitution(_ context.Context, _ string, _, _ int) ([]models.IncidentLog, int64, error) {
+	return nil, 0, nil
 }
 func (m *mockSettingRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*models.UptimeResponse, error) {
 	return &models.UptimeResponse{SLAPercentage: 100.0, TotalDays: 30, Days: []models.UptimeDayBucket{}}, nil

@@ -123,11 +123,12 @@ func (m *mockInstRepo) PurgeScheduleRuns(_ context.Context, _ time.Time) (int64,
 	return 0, nil
 }
 func (m *mockInstRepo) CreateIncident(_ context.Context, _ *models.IncidentLog) error { return nil }
+func (m *mockInstRepo) GetActiveIncident(_ context.Context, _, _, _ string) (*models.IncidentLog, error) { return nil, nil }
 func (m *mockInstRepo) ResolveActiveIncident(_ context.Context, _, _, _ string, _ time.Time, _ bool) (*models.IncidentLog, error) {
 	return nil, nil
 }
-func (m *mockInstRepo) GetIncidentsByInstitution(_ context.Context, _ string, _ int) ([]models.IncidentLog, error) {
-	return nil, nil
+func (m *mockInstRepo) GetIncidentsByInstitution(_ context.Context, _ string, _, _ int) ([]models.IncidentLog, int64, error) {
+	return nil, 0, nil
 }
 func (m *mockInstRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*models.UptimeResponse, error) {
 	return &models.UptimeResponse{SLAPercentage: 100.0, TotalDays: 30, Days: []models.UptimeDayBucket{}}, nil

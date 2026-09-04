@@ -102,11 +102,12 @@ func (m *mockCleanupRepo) IsIPBlacklisted(_ context.Context, _ string) (bool, er
 func (m *mockCleanupRepo) GetBlacklistedIPs(_ context.Context) ([]string, error)          { return nil, nil }
 func (m *mockCleanupRepo) ScheduleRepo() repository.ScheduleRepository                  { return nil }
 func (m *mockCleanupRepo) CreateIncident(_ context.Context, _ *models.IncidentLog) error { return nil }
+func (m *mockCleanupRepo) GetActiveIncident(_ context.Context, _, _, _ string) (*models.IncidentLog, error) { return nil, nil }
 func (m *mockCleanupRepo) ResolveActiveIncident(_ context.Context, _, _, _ string, _ time.Time, _ bool) (*models.IncidentLog, error) {
 	return nil, nil
 }
-func (m *mockCleanupRepo) GetIncidentsByInstitution(_ context.Context, _ string, _ int) ([]models.IncidentLog, error) {
-	return nil, nil
+func (m *mockCleanupRepo) GetIncidentsByInstitution(_ context.Context, _ string, _, _ int) ([]models.IncidentLog, int64, error) {
+	return nil, 0, nil
 }
 func (m *mockCleanupRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*models.UptimeResponse, error) {
 	return nil, nil

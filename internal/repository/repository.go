@@ -86,8 +86,9 @@ type Repository interface {
 
 	// Incident & Uptime
 	CreateIncident(ctx context.Context, inc *models.IncidentLog) error
+	GetActiveIncident(ctx context.Context, instID, serviceName, incType string) (*models.IncidentLog, error)
 	ResolveActiveIncident(ctx context.Context, instID, serviceName, incType string, resolvedAt time.Time, resolvedByAuto bool) (*models.IncidentLog, error)
-	GetIncidentsByInstitution(ctx context.Context, instID string, limit int) ([]models.IncidentLog, error)
+	GetIncidentsByInstitution(ctx context.Context, instID string, page, limit int) ([]models.IncidentLog, int64, error)
 	GetUptimeStats(ctx context.Context, instID string, days int) (*models.UptimeResponse, error)
 	GetRecentIncidentsCount(ctx context.Context, since time.Time) (int64, error)
 	PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error)

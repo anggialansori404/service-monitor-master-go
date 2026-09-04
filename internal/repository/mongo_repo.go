@@ -1335,6 +1335,29 @@ func (r *MongoRepository) CreateIncident(ctx context.Context, inc *models.Incide
 	return err
 }
 
+// GetActiveIncident checks if there is an unresolved incident for a service/node.
+func (r *MongoRepository) GetActiveIncident(ctx context.Context, instID, serviceName, incType string) (*models.IncidentLog, error) {
+	coll := r.db.Collection("incidents")
+	filter := bson.M{
+		"institution_id": instID,
+		"type":           incType,
+		"resolved_at":    nil,
+	}
+	if serviceName != "" {
+		filter["service_name"] = serviceName
+	}
+	opts := options.FindOne().SetSort(bson.M{"started_at": -1})
+	var inc models.IncidentLog
+	err := coll.FindOne(ctx, filter, opts).Decode(&inc)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &inc, nil
+}
+
 // ResolveActiveIncident resolves an open incident for an institution service/node.
 func (r *MongoRepository) ResolveActiveIncident(ctx context.Context, instID, serviceName, incType string, resolvedAt time.Time, resolvedByAuto bool) (*models.IncidentLog, error) {
 	coll := r.db.Collection("incidents")
@@ -1377,27 +1400,39 @@ func (r *MongoRepository) ResolveActiveIncident(ctx context.Context, instID, ser
 	return &inc, nil
 }
 
-// GetIncidentsByInstitution retrieves recent incidents for an institution.
-func (r *MongoRepository) GetIncidentsByInstitution(ctx context.Context, instID string, limit int) ([]models.IncidentLog, error) {
-	if limit <= 0 {
-		limit = 50
+// GetIncidentsByInstitution retrieves recent incidents for an institution with pagination.
+func (r *MongoRepository) GetIncidentsByInstitution(ctx context.Context, instID string, page, limit int) ([]models.IncidentLog, int64, error) {
+	if page < 1 {
+		page = 1
 	}
+	if limit <= 0 {
+		limit = 10
+	}
+	skip := int64((page - 1) * limit)
+
 	coll := r.db.Collection("incidents")
-	opts := options.Find().SetSort(bson.M{"started_at": -1}).SetLimit(int64(limit))
-	cur, err := coll.Find(ctx, bson.M{"institution_id": instID}, opts)
+	filter := bson.M{"institution_id": instID}
+
+	total, err := coll.CountDocuments(ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+
+	opts := options.Find().SetSort(bson.M{"started_at": -1}).SetSkip(skip).SetLimit(int64(limit))
+	cur, err := coll.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
 	}
 	defer cur.Close(ctx)
 
 	var list []models.IncidentLog
 	if err := cur.All(ctx, &list); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if list == nil {
 		list = []models.IncidentLog{}
 	}
-	return list, nil
+	return list, total, nil
 }
 
 // GetRecentIncidentsCount returns count of incidents started since a timestamp.

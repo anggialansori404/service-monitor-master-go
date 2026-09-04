@@ -95,7 +95,36 @@ func (m *Manager) handleEvent(ctx context.Context, event AlertEvent) {
 	}
 }
 
-func (m *Manager) handleDown(_ context.Context, key string, event AlertEvent) {
+func (m *Manager) handleDown(ctx context.Context, key string, event AlertEvent) {
+	// 1. Immediately record incident if not in maintenance and not already active
+	inst, err := m.repo.GetInstitutionByID(event.InstitutionID)
+	inMaintenance := false
+	if err == nil && inst != nil {
+		if inst.InMaintenance && (inst.MaintenanceUntil == nil || time.Now().Before(*inst.MaintenanceUntil)) {
+			inMaintenance = true
+		}
+	}
+
+	if !inMaintenance {
+		active, _ := m.repo.GetActiveIncident(ctx, event.InstitutionID, event.ServiceName, "service_down")
+		if active == nil {
+			causeMsg := strings.TrimSpace(event.Message)
+			if causeMsg == "" {
+				causeMsg = "Service stopped / unreachable"
+			}
+			_ = m.repo.CreateIncident(ctx, &models.IncidentLog{
+				InstitutionID: event.InstitutionID,
+				ServiceName:   event.ServiceName,
+				Type:          "service_down",
+				StartedAt:     event.Timestamp,
+				Cause:         causeMsg,
+				CreatedAt:     time.Now(),
+			})
+			log.Printf("Recorded service_down incident for %s (institution: %s, cause: %s)", event.ServiceName, event.InstitutionID, causeMsg)
+		}
+	}
+
+	// 2. Telegram Alert Deduplication / Debounce
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -119,17 +148,13 @@ func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
 
 	m.mu.Lock()
 
-	// Case 1: Still in debounce window — flap mitigation
-	if _, ok := m.debounceMap[key]; ok {
-		// Stop the timer, clean up
-		if t, ok := m.debounceMap[key]; ok {
-			t.Stop()
-		}
+	// Case 1: Still in debounce window — flap mitigation for Telegram
+	timerActive := false
+	if t, ok := m.debounceMap[key]; ok {
+		timerActive = true
+		t.Stop()
 		delete(m.debounceMap, key)
 		delete(m.pendingDowns, key)
-		m.mu.Unlock()
-		log.Printf("Flap detected and mitigated for %s: it recovered within %v", key, m.debounceTime)
-		return
 	}
 
 	// Case 2: Timer already fired — check active batch
@@ -140,8 +165,20 @@ func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
 
 	m.mu.Unlock()
 
-	// Resolve open incident for this service
-	_, _ = m.repo.ResolveActiveIncident(ctx, event.InstitutionID, event.ServiceName, "service_down", event.Timestamp, false)
+	// Determine if resolved by auto (e.g. recovered within debounce window or agent reported auto-restart)
+	resolvedByAuto := timerActive || strings.Contains(strings.ToLower(event.Message), "auto-restart")
+
+	// ALWAYS resolve open incident for this service
+	resolvedInc, _ := m.repo.ResolveActiveIncident(ctx, event.InstitutionID, event.ServiceName, "service_down", event.Timestamp, resolvedByAuto)
+	if resolvedInc != nil {
+		log.Printf("Resolved service_down incident for %s (inst: %s, duration: %ds, auto: %v)",
+			event.ServiceName, event.InstitutionID, resolvedInc.DurationSec, resolvedByAuto)
+	}
+
+	if timerActive {
+		log.Printf("Flap detected and mitigated for %s: it recovered within %v (Telegram notification suppressed)", key, m.debounceTime)
+		return
+	}
 
 	if hasBatch {
 		// Edit the existing batch Telegram message
@@ -262,14 +299,17 @@ func (m *Manager) processTimeout(ctx context.Context, key string) {
 	if len(servicesDown) > 0 {
 		log.Printf("Alert Timer fired for %s (%d services down). Triggering notification protocol.", key, len(servicesDown))
 		for _, ev := range servicesDown {
-			_ = m.repo.CreateIncident(ctx, &models.IncidentLog{
-				InstitutionID: ev.InstitutionID,
-				ServiceName:   ev.ServiceName,
-				Type:          "service_down",
-				StartedAt:     ev.Timestamp,
-				Cause:         ev.Message,
-				CreatedAt:     time.Now(),
-			})
+			active, _ := m.repo.GetActiveIncident(ctx, ev.InstitutionID, ev.ServiceName, "service_down")
+			if active == nil {
+				_ = m.repo.CreateIncident(ctx, &models.IncidentLog{
+					InstitutionID: ev.InstitutionID,
+					ServiceName:   ev.ServiceName,
+					Type:          "service_down",
+					StartedAt:     ev.Timestamp,
+					Cause:         ev.Message,
+					CreatedAt:     time.Now(),
+				})
+			}
 		}
 		m.sendBatchedAlert(ctx, instID, servicesDown)
 	}

@@ -766,6 +766,23 @@ func (r *SQLRepository) CreateIncident(ctx context.Context, inc *models.Incident
 	return r.db.WithContext(ctx).Create(inc).Error
 }
 
+// GetActiveIncident checks if there is an unresolved incident for a service/node.
+func (r *SQLRepository) GetActiveIncident(ctx context.Context, instID, serviceName, incType string) (*models.IncidentLog, error) {
+	var inc models.IncidentLog
+	query := r.db.WithContext(ctx).Where("institution_id = ? AND type = ? AND resolved_at IS NULL", instID, incType)
+	if serviceName != "" {
+		query = query.Where("service_name = ?", serviceName)
+	}
+	err := query.Order("started_at desc").First(&inc).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil // No active incident
+		}
+		return nil, err
+	}
+	return &inc, nil
+}
+
 // ResolveActiveIncident resolves an open incident for an institution service/node.
 func (r *SQLRepository) ResolveActiveIncident(ctx context.Context, instID, serviceName, incType string, resolvedAt time.Time, resolvedByAuto bool) (*models.IncidentLog, error) {
 	var inc models.IncidentLog
@@ -794,14 +811,27 @@ func (r *SQLRepository) ResolveActiveIncident(ctx context.Context, instID, servi
 	return &inc, nil
 }
 
-// GetIncidentsByInstitution retrieves recent incidents for an institution.
-func (r *SQLRepository) GetIncidentsByInstitution(ctx context.Context, instID string, limit int) ([]models.IncidentLog, error) {
-	if limit <= 0 {
-		limit = 50
+// GetIncidentsByInstitution retrieves recent incidents for an institution with pagination.
+func (r *SQLRepository) GetIncidentsByInstitution(ctx context.Context, instID string, page, limit int) ([]models.IncidentLog, int64, error) {
+	if page < 1 {
+		page = 1
 	}
+	if limit <= 0 {
+		limit = 10
+	}
+	offset := (page - 1) * limit
+
+	var total int64
+	if err := r.db.WithContext(ctx).Model(&models.IncidentLog{}).Where("institution_id = ?", instID).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
 	var logs []models.IncidentLog
-	err := r.db.WithContext(ctx).Where("institution_id = ?", instID).Order("started_at desc").Limit(limit).Find(&logs).Error
-	return logs, err
+	err := r.db.WithContext(ctx).Where("institution_id = ?", instID).Order("started_at desc").Offset(offset).Limit(limit).Find(&logs).Error
+	if logs == nil {
+		logs = []models.IncidentLog{}
+	}
+	return logs, total, err
 }
 
 // GetRecentIncidentsCount returns count of incidents started since a timestamp.
