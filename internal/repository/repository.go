@@ -91,5 +91,6 @@ type Repository interface {
 	GetIncidentsByInstitution(ctx context.Context, instID string, page, limit int) ([]models.IncidentLog, int64, error)
 	GetUptimeStats(ctx context.Context, instID string, days int) (*models.UptimeResponse, error)
 	GetRecentIncidentsCount(ctx context.Context, since time.Time) (int64, error)
+	GetRecentIncidentsCountByInstitution(ctx context.Context, instID string, since time.Time) (int64, error)
 	PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error)
 }

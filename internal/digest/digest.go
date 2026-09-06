@@ -54,17 +54,23 @@ func BuildInstitutionDigestMessage(instName string, isOnline bool, totalServices
 		svcStr = fmt.Sprintf("⚠️ %d Service DOWN", downServices)
 	}
 
+	incidentIcon := "✅"
+	if incidents24h > 0 {
+		incidentIcon = "🚨"
+	}
+
 	return fmt.Sprintf("📊 *LAPORAN HARIAN LEMBAGA*\n\n"+
 		"🏢 *Lembaga:* %s\n"+
 		"⏰ *Waktu:* %s\n\n"+
 		"🖥️ *Node Server:* %s\n"+
 		"⚙️ *Kondisi Service:* %s (%d/%d Aktif)\n"+
-		"🚨 *Insiden 24 Jam:* %d insiden\n\n"+
+		"%s *Insiden 24 Jam:* %d insiden\n\n"+
 		"_Sistem monitoring beroperasi normal._",
 		instName,
 		t.Format("02 Jan 2006 15:04 WIB"),
 		nodeStr,
 		svcStr, runningServices, totalServices,
+		incidentIcon,
 		incidents24h,
 	)
 }
@@ -119,9 +125,10 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 		instDownSvc := 0
 
 		for _, s := range servicesList {
-			if s.Status == "UP" {
+			switch s.Status {
+			case "UP":
 				instRunningSvc++
-			} else if s.Status == "DOWN" {
+			case "DOWN":
 				instDownSvc++
 			}
 		}
@@ -130,13 +137,19 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 		runningServices += instRunningSvc
 		downServices += instDownSvc
 
+		instIncidents, err := repo.GetRecentIncidentsCountByInstitution(ctx, inst.ID, since24h)
+		if err != nil {
+			log.Printf("[DAILY DIGEST ERROR] Failed to fetch incidents count for %s: %v", inst.Name, err)
+			instIncidents = 0
+		}
+
 		instStats = append(instStats, instStat{
 			inst:         inst,
 			isOnline:     isOnline,
 			totalSvc:     instTotalSvc,
 			runningSvc:   instRunningSvc,
 			downSvc:      instDownSvc,
-			incidents24h: 0, // calculated from repo
+			incidents24h: instIncidents,
 		})
 	}
 

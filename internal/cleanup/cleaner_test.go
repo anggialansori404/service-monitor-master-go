@@ -115,6 +115,9 @@ func (m *mockCleanupRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*m
 func (m *mockCleanupRepo) GetRecentIncidentsCount(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }
+func (m *mockCleanupRepo) GetRecentIncidentsCountByInstitution(_ context.Context, _ string, _ time.Time) (int64, error) {
+	return 0, nil
+}
 func (m *mockCleanupRepo) PurgeIncidents(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }

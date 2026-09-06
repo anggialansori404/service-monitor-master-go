@@ -1441,6 +1441,15 @@ func (r *MongoRepository) GetRecentIncidentsCount(ctx context.Context, since tim
 	return coll.CountDocuments(ctx, bson.M{"started_at": bson.M{"$gte": since}})
 }
 
+// GetRecentIncidentsCountByInstitution returns count of incidents started since a timestamp for a specific institution.
+func (r *MongoRepository) GetRecentIncidentsCountByInstitution(ctx context.Context, instID string, since time.Time) (int64, error) {
+	coll := r.db.Collection("incidents")
+	return coll.CountDocuments(ctx, bson.M{
+		"institution_id": instID,
+		"started_at":     bson.M{"$gte": since},
+	})
+}
+
 // PurgeIncidents deletes incident logs older than a cutoff date.
 func (r *MongoRepository) PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error) {
 	coll := r.db.Collection("incidents")

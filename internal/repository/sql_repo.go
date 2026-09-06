@@ -841,6 +841,13 @@ func (r *SQLRepository) GetRecentIncidentsCount(ctx context.Context, since time.
 	return count, err
 }
 
+// GetRecentIncidentsCountByInstitution returns count of incidents started since a timestamp for a specific institution.
+func (r *SQLRepository) GetRecentIncidentsCountByInstitution(ctx context.Context, instID string, since time.Time) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.IncidentLog{}).Where("institution_id = ? AND started_at >= ?", instID, since).Count(&count).Error
+	return count, err
+}
+
 // PurgeIncidents deletes incident logs older than a cutoff date.
 func (r *SQLRepository) PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error) {
 	result := r.db.WithContext(ctx).Where("started_at < ?", olderThan).Delete(&models.IncidentLog{})

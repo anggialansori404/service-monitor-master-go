@@ -114,6 +114,9 @@ func (m *mockSettingRepo) GetUptimeStats(_ context.Context, _ string, _ int) (*m
 func (m *mockSettingRepo) GetRecentIncidentsCount(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }
+func (m *mockSettingRepo) GetRecentIncidentsCountByInstitution(_ context.Context, _ string, _ time.Time) (int64, error) {
+	return 0, nil
+}
 func (m *mockSettingRepo) PurgeIncidents(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }
