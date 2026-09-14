@@ -46,6 +46,7 @@ type mongoInstitutionDoc struct {
 	TelegramTopicID      string               `bson:"telegram_topic_id"`
 	EnableTelegramAlerts bool                 `bson:"enable_telegram_alerts"`
 	MirrorToGlobal       bool                 `bson:"mirror_to_global"`
+	NotifyNodeOffline    *bool                `bson:"notify_node_offline,omitempty"`
 	InMaintenance        bool                 `bson:"in_maintenance"`
 	MaintenanceUntil     *time.Time           `bson:"maintenance_until,omitempty"`
 }
@@ -58,6 +59,11 @@ func (doc *mongoInstitutionDoc) toModel() *models.Institution {
 		docID = s
 	} else if doc.ID != nil {
 		docID = fmt.Sprintf("%v", doc.ID)
+	}
+
+	notifyNode := true
+	if doc.NotifyNodeOffline != nil {
+		notifyNode = *doc.NotifyNodeOffline
 	}
 
 	return &models.Institution{
@@ -74,6 +80,7 @@ func (doc *mongoInstitutionDoc) toModel() *models.Institution {
 		TelegramTopicID:      doc.TelegramTopicID,
 		EnableTelegramAlerts: doc.EnableTelegramAlerts,
 		MirrorToGlobal:       doc.MirrorToGlobal,
+		NotifyNodeOffline:    notifyNode,
 		InMaintenance:        doc.InMaintenance,
 		MaintenanceUntil:     doc.MaintenanceUntil,
 	}
@@ -269,6 +276,7 @@ func (r *MongoRepository) UpdateInstitution(inst *models.Institution) error {
 		"telegram_topic_id":      inst.TelegramTopicID,
 		"enable_telegram_alerts": inst.EnableTelegramAlerts,
 		"mirror_to_global":       inst.MirrorToGlobal,
+		"notify_node_offline":    inst.NotifyNodeOffline,
 		"in_maintenance":         inst.InMaintenance,
 		"maintenance_until":      inst.MaintenanceUntil,
 	}

@@ -52,6 +52,19 @@ func TestMongoInstitutionDocToModel(t *testing.T) {
 	if model.TelegramTopicID != "42" {
 		t.Errorf("expected TelegramTopicID '42', got '%s'", model.TelegramTopicID)
 	}
+	if !model.NotifyNodeOffline {
+		t.Errorf("expected NotifyNodeOffline to default to true when nil in doc, got false")
+	}
+
+	// Test with explicit false for NotifyNodeOffline
+	falseVal := false
+	docWithFalse := &mongoInstitutionDoc{
+		ID:                "test-false",
+		NotifyNodeOffline: &falseVal,
+	}
+	if docWithFalse.toModel().NotifyNodeOffline {
+		t.Errorf("expected NotifyNodeOffline to be false, got true")
+	}
 
 	// Test with string ID as fallback
 	docStringID := &mongoInstitutionDoc{
