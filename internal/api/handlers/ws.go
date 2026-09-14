@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"monitoring-master/internal/alert"
@@ -26,22 +27,297 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// nodeState tracks disconnect, grace period, and flapping state for one institution.
+type nodeState struct {
+	disconnectTimer    *time.Timer
+	disconnectAt       time.Time
+	recentDisconnects  []time.Time
+	flappingMutedUntil time.Time
+	alertSent          bool
+	disconnectMsgIDs   []alert.TargetMessageID
+}
+
 // WSHandler holds dependencies for WebSocket endpoints.
 type WSHandler struct {
 	Registry          *ws.Registry
 	Repo              repository.Repository
 	AlertMgr          *alert.Manager
-	disconnectMsgIDs  map[string][]alert.TargetMessageID // institutionID -> telegram message_ids of last disconnect alerts
+	nodeStates        map[string]*nodeState
+	mu                sync.Mutex
+	gracePeriod       time.Duration
+	flappingWindow    time.Duration
+	flappingThreshold int
+	flappingCooldown  time.Duration
+	sendAlertFunc     func(token, chatID, topicID, text string) (int, error)
+	editAlertFunc     func(token, chatID, topicID string, messageID int, text string) error
 }
 
 // NewWSHandler creates a new WSHandler.
 func NewWSHandler(registry *ws.Registry, repo repository.Repository, alertMgr *alert.Manager) *WSHandler {
 	return &WSHandler{
-		Registry:         registry,
-		Repo:             repo,
-		AlertMgr:         alertMgr,
-		disconnectMsgIDs: make(map[string][]alert.TargetMessageID),
+		Registry:          registry,
+		Repo:              repo,
+		AlertMgr:          alertMgr,
+		nodeStates:        make(map[string]*nodeState),
+		gracePeriod:       2 * time.Minute,
+		flappingWindow:    10 * time.Minute,
+		flappingThreshold: 3,
+		flappingCooldown:  15 * time.Minute,
+		sendAlertFunc:     services.SendTelegramAlert,
+		editAlertFunc:     services.EditTelegramMessage,
 	}
+}
+
+// SetTimingConfig overrides timing parameters for testing or configuration.
+func (h *WSHandler) SetTimingConfig(gracePeriod, flappingWindow, flappingCooldown time.Duration, flappingThreshold int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.gracePeriod = gracePeriod
+	h.flappingWindow = flappingWindow
+	h.flappingCooldown = flappingCooldown
+	h.flappingThreshold = flappingThreshold
+}
+
+// SetAlertHooks overrides telegram send and edit functions for testing.
+func (h *WSHandler) SetAlertHooks(
+	send func(token, chatID, topicID, text string) (int, error),
+	edit func(token, chatID, topicID string, messageID int, text string) error,
+) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sendAlertFunc = send
+	h.editAlertFunc = edit
+}
+
+func formatDowntime(d time.Duration) string {
+	d = d.Round(time.Second)
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	seconds := int(d.Seconds()) % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%d jam %d menit %d detik", hours, minutes, seconds)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%d menit %d detik", minutes, seconds)
+	}
+	return fmt.Sprintf("%d detik", seconds)
+}
+
+// OnAgentConnected handles node recovery logic.
+func (h *WSHandler) OnAgentConnected(institution *models.Institution) {
+	instID := institution.ID
+	h.mu.Lock()
+	state, exists := h.nodeStates[instID]
+	if !exists {
+		state = &nodeState{}
+		h.nodeStates[instID] = state
+	}
+
+	// 1. Cancel pending disconnect timer if agent reconnected within grace period (silent reconnect)
+	if state.disconnectTimer != nil {
+		state.disconnectTimer.Stop()
+		state.disconnectTimer = nil
+		log.Printf("[NODE-WS] Agent %s reconnected within grace period. Disconnect alert canceled.", institution.Name)
+	}
+
+	// 2. If alert was already sent to Telegram (offline > grace period), edit messages to recovered with downtime duration
+	if state.alertSent && len(state.disconnectMsgIDs) > 0 {
+		downtime := time.Since(state.disconnectAt)
+		durationStr := formatDowntime(downtime)
+		recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\n\nNode Agent kembali tersambung!\n🏢 *Lembaga:* %s\n⏱️ *Durasi Offline:* %s\n⏰ *Waktu:* %s\n\n_Sistem kembali normal._",
+			institution.Name, durationStr, time.Now().Format("02 Jan 2006 15:04:05"))
+
+		for _, item := range state.disconnectMsgIDs {
+			if item.MessageID == 0 {
+				continue
+			}
+			if err := h.editAlertFunc(item.Target.Token, item.Target.ChatID, item.Target.TopicID, item.MessageID, recoveryMsg); err != nil {
+				log.Printf("Failed to edit disconnect alert for %s (msgID %d): %v", institution.Name, item.MessageID, err)
+			}
+		}
+		state.disconnectMsgIDs = nil
+		state.alertSent = false
+
+		// Resolve active node_offline incident in DB
+		_, _ = h.Repo.ResolveActiveIncident(context.Background(), instID, "node-agent", "node_offline", time.Now(), false)
+	} else if !state.alertSent {
+		// Silent reconnect: resolve any stale incident record
+		_, _ = h.Repo.ResolveActiveIncident(context.Background(), instID, "node-agent", "node_offline", time.Now(), false)
+	}
+	h.mu.Unlock()
+}
+
+// OnAgentDisconnected handles node disconnect, grace period, and flapping detection.
+func (h *WSHandler) OnAgentDisconnected(institution *models.Institution) {
+	agentID := institution.AgentID
+	instID := institution.ID
+	h.Registry.Unregister(agentID)
+	log.Printf("agent disconnected: %s (institution: %s)", agentID, institution.Name)
+
+	// Refresh institution in case settings or maintenance mode changed while agent was connected
+	if freshInst, err := h.Repo.GetInstitutionByID(instID); err == nil && freshInst != nil {
+		institution = freshInst
+	}
+
+	// Check if node offline alerts are disabled for this institution
+	if !institution.NotifyNodeOffline {
+		log.Printf("[NODE-WS] Node offline notifications disabled for %s. Skipping alerts.", institution.Name)
+		return
+	}
+
+	// Check if in maintenance mode
+	inMaintenance := institution.InMaintenance && (institution.MaintenanceUntil == nil || time.Now().Before(*institution.MaintenanceUntil))
+	if inMaintenance {
+		log.Printf("[NODE-WS] Institution %s in maintenance. Skipping node offline alert.", institution.Name)
+		return
+	}
+
+	now := time.Now()
+
+	h.mu.Lock()
+	state, exists := h.nodeStates[instID]
+	if !exists {
+		state = &nodeState{}
+		h.nodeStates[instID] = state
+	}
+
+	// Clean up recent disconnects outside the flapping window
+	windowStart := now.Add(-h.flappingWindow)
+	var filtered []time.Time
+	for _, t := range state.recentDisconnects {
+		if t.After(windowStart) {
+			filtered = append(filtered, t)
+		}
+	}
+	filtered = append(filtered, now)
+	state.recentDisconnects = filtered
+	state.disconnectAt = now
+	state.alertSent = false
+
+	// Check if currently muted due to flapping
+	if now.Before(state.flappingMutedUntil) {
+		log.Printf("[NODE-WS] Institution %s is flapping-muted until %s. Suppressing alert.", institution.Name, state.flappingMutedUntil.Format(time.RFC3339))
+		h.mu.Unlock()
+		return
+	}
+
+	// Check if flapping threshold reached
+	if len(state.recentDisconnects) >= h.flappingThreshold {
+		state.flappingMutedUntil = now.Add(h.flappingCooldown)
+		cooldownMins := int(h.flappingCooldown.Minutes())
+		windowMins := int(h.flappingWindow.Minutes())
+		count := len(state.recentDisconnects)
+
+		flappingMsg := fmt.Sprintf("⚠️ *KONEKSI NODE TIDAK STABIL (FLAPPING)*\n\n🏢 *Lembaga:* %s\n📊 *Aktivitas:* Terputus %d kali dalam %d menit terakhir.\n⏳ *Tindakan:* Notifikasi offline untuk lembaga ini *diredam selama %d menit* guna mencegah spam.\n\n_Koneksi internet di server lembaga kemungkinan mengalami fluktuasi/jitter._",
+			institution.Name, count, windowMins, cooldownMins)
+
+		// Cancel any pending grace period timer
+		if state.disconnectTimer != nil {
+			state.disconnectTimer.Stop()
+			state.disconnectTimer = nil
+		}
+		h.mu.Unlock()
+
+		// Send 1x flapping warning notification
+		setting, _ := h.Repo.GetSettings(context.Background())
+		targets := alert.ResolveTelegramTargets(institution, setting)
+		for _, target := range targets {
+			if _, err := h.sendAlertFunc(target.Token, target.ChatID, target.TopicID, flappingMsg); err != nil {
+				log.Printf("Failed to send flapping alert for %s to target %+v: %v", institution.Name, target, err)
+			}
+		}
+		return
+	}
+
+	// Cancel any previous timer
+	if state.disconnectTimer != nil {
+		state.disconnectTimer.Stop()
+	}
+
+	// Start Grace Period Timer (e.g. 2 minutes)
+	state.disconnectTimer = time.AfterFunc(h.gracePeriod, func() {
+		h.handleGracePeriodExpired(instID)
+	})
+	h.mu.Unlock()
+
+	log.Printf("[NODE-WS] Grace period (%v) started for %s disconnect.", h.gracePeriod, institution.Name)
+}
+
+func (h *WSHandler) handleGracePeriodExpired(instID string) {
+	h.mu.Lock()
+	state, exists := h.nodeStates[instID]
+	if !exists {
+		h.mu.Unlock()
+		return
+	}
+
+	// Re-check if muted
+	if time.Now().Before(state.flappingMutedUntil) {
+		h.mu.Unlock()
+		return
+	}
+
+	disconnectAt := state.disconnectAt
+	state.alertSent = true
+	h.mu.Unlock()
+
+	institution, err := h.Repo.GetInstitutionByID(instID)
+	if err != nil || institution == nil {
+		log.Printf("[NODE-WS] GracePeriodExpired: institution %s not found: %v", instID, err)
+		return
+	}
+
+	// Check if already reconnected
+	if h.Registry.IsConnected(institution.AgentID) {
+		log.Printf("[NODE-WS] GracePeriodExpired: agent %s is already connected.", institution.AgentID)
+		return
+	}
+
+	// Re-check NotifyNodeOffline and Maintenance
+	if !institution.NotifyNodeOffline {
+		return
+	}
+	if institution.InMaintenance && (institution.MaintenanceUntil == nil || time.Now().Before(*institution.MaintenanceUntil)) {
+		return
+	}
+
+	// Record node_offline incident
+	_ = h.Repo.CreateIncident(context.Background(), &models.IncidentLog{
+		InstitutionID: instID,
+		ServiceName:   "node-agent",
+		Type:          "node_offline",
+		StartedAt:     disconnectAt,
+		Cause:         fmt.Sprintf("Agent disconnected (offline > %v)", h.gracePeriod),
+		CreatedAt:     time.Now(),
+	})
+
+	// Send CRITICAL ALERT to Telegram
+	alertMsg := fmt.Sprintf("🔴 *CRITICAL ALERT*\n\nNode Agent terputus (Offline)!\n🏢 *Lembaga:* %s\n⏰ *Waktu Terputus:* %s\n\n_Node tidak merespons lebih dari %v. Mohon segera periksa server/VPS lembaga terkait._",
+		institution.Name, disconnectAt.Format("02 Jan 2006 15:04:05"), h.gracePeriod)
+
+	setting, _ := h.Repo.GetSettings(context.Background())
+	targets := alert.ResolveTelegramTargets(institution, setting)
+
+	var sentMsgs []alert.TargetMessageID
+	for _, target := range targets {
+		msgID, sendErr := h.sendAlertFunc(target.Token, target.ChatID, target.TopicID, alertMsg)
+		if sendErr != nil {
+			log.Printf("Failed to send disconnect alert for %s to target %+v: %v", institution.Name, target, sendErr)
+		} else if msgID != 0 {
+			sentMsgs = append(sentMsgs, alert.TargetMessageID{
+				Target:    target,
+				MessageID: msgID,
+			})
+			log.Printf("Saved disconnect message_id %d for institution %s", msgID, institution.Name)
+		}
+	}
+
+	h.mu.Lock()
+	if s, ok := h.nodeStates[instID]; ok && s.alertSent {
+		s.disconnectMsgIDs = append(s.disconnectMsgIDs, sentMsgs...)
+	}
+	h.mu.Unlock()
 }
 
 // wsResponse is used to detect response messages from agents.
@@ -83,63 +359,10 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	go client.StartWritePump()
 	log.Printf("agent connected: %s (institution: %s)", agentID, institution.Name)
 
-	// Resolve active node_offline incident if any
-	_, _ = h.Repo.ResolveActiveIncident(context.Background(), instID, "node-agent", "node_offline", time.Now(), false)
-
-	// On reconnect, edit ALL previous "disconnected" Telegram messages to "recovered"
-	if targetMsgs, ok := h.disconnectMsgIDs[instID]; ok && len(targetMsgs) > 0 {
-		recoveryMsg := fmt.Sprintf("✅ *NODE RECOVERED*\n\nNode Agent kembali tersambung!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Sistem kembali normal._",
-			institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
-		for _, item := range targetMsgs {
-			if item.MessageID == 0 {
-				continue
-			}
-			if err := services.EditTelegramMessage(item.Target.Token, item.Target.ChatID, item.Target.TopicID, item.MessageID, recoveryMsg); err != nil {
-				log.Printf("Failed to edit disconnect alert for %s (msgID %d): %v", institution.Name, item.MessageID, err)
-			}
-		}
-		delete(h.disconnectMsgIDs, instID)
-	}
+	h.OnAgentConnected(institution)
 
 	defer func() {
-		h.Registry.Unregister(agentID)
-		log.Printf("agent disconnected: %s (institution: %s)", agentID, institution.Name)
-
-		// TRIGGER TELEGRAM ALERT — track message_id for later edit across all resolved targets
-		alertMsg := fmt.Sprintf("🔴 *CRITICAL ALERT*\n\nNode Agent terputus (Offline)!\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Mohon segera periksa server/VPS lembaga terkait._",
-			institution.Name, time.Now().Format("02 Jan 2006 15:04:05"))
-
-		// Refresh institution in case maintenance mode was enabled while agent was connected
-		if freshInst, err := h.Repo.GetInstitutionByID(instID); err == nil && freshInst != nil {
-			institution = freshInst
-		}
-
-		// Record node_offline incident unless in active maintenance
-		if !institution.InMaintenance || (institution.MaintenanceUntil != nil && time.Now().After(*institution.MaintenanceUntil)) {
-			_ = h.Repo.CreateIncident(context.Background(), &models.IncidentLog{
-				InstitutionID: instID,
-				ServiceName:   "node-agent",
-				Type:          "node_offline",
-				StartedAt:     time.Now(),
-				Cause:         "Agent disconnected",
-				CreatedAt:     time.Now(),
-			})
-		}
-
-		setting, _ := h.Repo.GetSettings(context.Background())
-		targets := alert.ResolveTelegramTargets(institution, setting)
-		for _, target := range targets {
-			msgID, sendErr := services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, alertMsg)
-			if sendErr != nil {
-				log.Printf("Failed to send disconnect alert for %s to target %+v: %v", institution.Name, target, sendErr)
-			} else if msgID != 0 {
-				h.disconnectMsgIDs[instID] = append(h.disconnectMsgIDs[instID], alert.TargetMessageID{
-					Target:    target,
-					MessageID: msgID,
-				})
-				log.Printf("Saved disconnect message_id %d for institution %s (total pending: %d)", msgID, institution.Name, len(h.disconnectMsgIDs[instID]))
-			}
-		}
+		h.OnAgentDisconnected(institution)
 	}()
 
 	for {

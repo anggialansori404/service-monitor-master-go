@@ -22,6 +22,7 @@ type Institution struct {
 	TelegramTopicID      string `json:"telegram_topic_id" bson:"telegram_topic_id" gorm:"default:''"`
 	EnableTelegramAlerts bool   `json:"enable_telegram_alerts" bson:"enable_telegram_alerts" gorm:"default:true"`
 	MirrorToGlobal       bool   `json:"mirror_to_global" bson:"mirror_to_global" gorm:"default:false"`
+	NotifyNodeOffline    bool   `json:"notify_node_offline" bson:"notify_node_offline" gorm:"default:true"`
 
 	// Maintenance Mode
 	InMaintenance    bool       `json:"in_maintenance" bson:"in_maintenance" gorm:"default:false"`

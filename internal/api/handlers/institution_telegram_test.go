@@ -167,6 +167,7 @@ func TestCreateAndUpdateInstitutionTelegramFields(t *testing.T) {
 		"telegram_topic_id":      "topic-789",
 		"enable_telegram_alerts": true,
 		"mirror_to_global":       true,
+		"notify_node_offline":    false,
 	}
 	body, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("POST", "/institutions", bytes.NewBuffer(body))
@@ -177,14 +178,15 @@ func TestCreateAndUpdateInstitutionTelegramFields(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected status 201, got %d: %s", w.Code, w.Body.String())
 	}
-	if repo.createdInst == nil || !repo.createdInst.UseCustomTelegram || repo.createdInst.TelegramBotToken != "tok-123" {
+	if repo.createdInst == nil || !repo.createdInst.UseCustomTelegram || repo.createdInst.TelegramBotToken != "tok-123" || repo.createdInst.NotifyNodeOffline != false {
 		t.Errorf("expected created institution to have custom telegram fields, got %+v", repo.createdInst)
 	}
 
 	// 2. Test Update
 	updatePayload := map[string]interface{}{
-		"telegram_chat_id": "new-chat-999",
-		"mirror_to_global": false,
+		"telegram_chat_id":    "new-chat-999",
+		"mirror_to_global":    false,
+		"notify_node_offline": true,
 	}
 	bodyUpdate, _ := json.Marshal(updatePayload)
 	reqUpdate, _ := http.NewRequest("PUT", "/institutions/inst-abc", bytes.NewBuffer(bodyUpdate))
@@ -195,7 +197,7 @@ func TestCreateAndUpdateInstitutionTelegramFields(t *testing.T) {
 	if wUpdate.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", wUpdate.Code, wUpdate.Body.String())
 	}
-	if repo.updatedInst == nil || repo.updatedInst.TelegramChatID != "new-chat-999" || repo.updatedInst.MirrorToGlobal != false {
+	if repo.updatedInst == nil || repo.updatedInst.TelegramChatID != "new-chat-999" || repo.updatedInst.MirrorToGlobal != false || repo.updatedInst.NotifyNodeOffline != true {
 		t.Errorf("expected updated institution to have updated telegram fields, got %+v", repo.updatedInst)
 	}
 }

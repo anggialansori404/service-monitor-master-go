@@ -441,6 +441,7 @@ type createInstitutionReq struct {
 	TelegramTopicID      string `json:"telegram_topic_id"`
 	EnableTelegramAlerts *bool  `json:"enable_telegram_alerts"`
 	MirrorToGlobal       bool   `json:"mirror_to_global"`
+	NotifyNodeOffline    *bool  `json:"notify_node_offline"`
 }
 
 // CreateInstitution handles POST /institutions.
@@ -457,6 +458,11 @@ func (h *FrontendHandler) CreateInstitution(c *gin.Context) {
 		enableAlerts = *req.EnableTelegramAlerts
 	}
 
+	notifyNodeOffline := true
+	if req.NotifyNodeOffline != nil {
+		notifyNodeOffline = *req.NotifyNodeOffline
+	}
+
 	inst := models.Institution{
 		Name:                 req.Name,
 		AgentID:              uuid.New().String(),
@@ -468,6 +474,7 @@ func (h *FrontendHandler) CreateInstitution(c *gin.Context) {
 		TelegramTopicID:      req.TelegramTopicID,
 		EnableTelegramAlerts: enableAlerts,
 		MirrorToGlobal:       req.MirrorToGlobal,
+		NotifyNodeOffline:    notifyNodeOffline,
 	}
 
 	if err := h.Repo.CreateInstitution(&inst); err != nil {
@@ -489,6 +496,7 @@ type updateInstitutionReq struct {
 	TelegramTopicID      *string `json:"telegram_topic_id"`
 	EnableTelegramAlerts *bool   `json:"enable_telegram_alerts"`
 	MirrorToGlobal       *bool   `json:"mirror_to_global"`
+	NotifyNodeOffline    *bool   `json:"notify_node_offline"`
 }
 
 // GetInstitution handles GET /institutions/:id.
@@ -586,6 +594,9 @@ func (h *FrontendHandler) UpdateInstitution(c *gin.Context) {
 	}
 	if req.MirrorToGlobal != nil {
 		inst.MirrorToGlobal = *req.MirrorToGlobal
+	}
+	if req.NotifyNodeOffline != nil {
+		inst.NotifyNodeOffline = *req.NotifyNodeOffline
 	}
 
 	if err := h.Repo.UpdateInstitution(inst); err != nil {
