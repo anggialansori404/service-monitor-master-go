@@ -22,13 +22,13 @@ var (
 	lastUnknownAgentLog = make(map[string]time.Time)
 )
 
-func logUnknownAgent(agentID string) {
+func logUnknownAgent(agentID string, clientIP string) {
 	unknownAgentLogMu.Lock()
 	defer unknownAgentLogMu.Unlock()
 	lastLog, ok := lastUnknownAgentLog[agentID]
 	if !ok || time.Since(lastLog) > 5*time.Minute {
 		lastUnknownAgentLog[agentID] = time.Now()
-		log.Printf("[AGENT-AUTH] Unauthorized request: AgentID %s not found (institution may have been deleted or agent config needs updating)", agentID)
+		log.Printf("[AGENT-AUTH] Unauthorized request from IP %s: AgentID '%s' not found (institution may have been deleted or agent config needs updating)", clientIP, agentID)
 	}
 }
 
@@ -37,8 +37,8 @@ func logUnknownAgent(agentID string) {
 // "Institution" (*models.Institution) in the Gin context.
 func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		agentID := c.GetHeader("X-Agent-ID")
-		secretKey := c.GetHeader("X-Secret-Key")
+		agentID := strings.TrimSpace(c.GetHeader("X-Agent-ID"))
+		secretKey := strings.TrimSpace(c.GetHeader("X-Secret-Key"))
 
 		if agentID == "" || secretKey == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -50,10 +50,10 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 		institution, err := repo.GetInstitutionByAgentID(c.Request.Context(), agentID)
 		if err != nil {
 			if errors.Is(err, repository.ErrNotFound) || err.Error() == "record not found" {
-				logUnknownAgent(agentID)
-				logutil.Debugf("[AGENT-AUTH] Agent not found or institution deleted for AgentID: %s", agentID)
+				logUnknownAgent(agentID, c.ClientIP())
+				logutil.Debugf("[AGENT-AUTH] Agent not found or institution deleted for AgentID: %s from IP %s", agentID, c.ClientIP())
 			} else {
-				log.Printf("[AGENT-AUTH] Database error checking AgentID: %s: %v", agentID, err)
+				log.Printf("[AGENT-AUTH] Database error checking AgentID: %s from IP %s: %v", agentID, c.ClientIP(), err)
 			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid agent credentials",
@@ -65,7 +65,7 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 		// 1. First try constant-time string comparison (for plain text / direct matching)
 		// 2. If fails, try bcrypt comparison (in case secret_key in DB was hashed)
 		matched := false
-		storedSecret := institution.SecretKey
+		storedSecret := strings.TrimSpace(institution.SecretKey)
 		trimmedSecret := strings.TrimSpace(secretKey)
 
 		// Exact match check (prevents subtle length mismatch issues)
@@ -81,7 +81,7 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 		}
 
 		if !matched {
-			log.Printf("[AGENT-AUTH] Secret mismatched for AgentID: %s", agentID)
+			log.Printf("[AGENT-AUTH] Secret mismatched for AgentID: %s from IP %s (received len=%d, stored len=%d)", agentID, c.ClientIP(), len(trimmedSecret), len(storedSecret))
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid agent credentials",
 			})
