@@ -132,21 +132,26 @@ func (c *Client) WriteJSON(v interface{}) error {
 	return c.SendMessage(data)
 }
 
-// Close gracefully closes the WebSocket connection.
-func (c *Client) Close() error {
+// CloseWithReason gracefully closes the WebSocket connection with a specific close code and reason.
+func (c *Client) CloseWithReason(closeCode int, reason string) error {
 	var err error
 	c.closeOnce.Do(func() {
 		close(c.done)
 		if c.Conn != nil {
 			_ = c.Conn.WriteControl(
 				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+				websocket.FormatCloseMessage(closeCode, reason),
 				time.Now().Add(5*time.Second),
 			)
 			err = c.Conn.Close()
 		}
 	})
 	return err
+}
+
+// Close gracefully closes the WebSocket connection with CloseNormalClosure.
+func (c *Client) Close() error {
+	return c.CloseWithReason(websocket.CloseNormalClosure, "")
 }
 
 // RegisterPending creates a channel for a given request ID and stores it.

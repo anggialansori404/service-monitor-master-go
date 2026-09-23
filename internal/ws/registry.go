@@ -2,6 +2,7 @@ package ws
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -30,24 +31,51 @@ func (r *Registry) Register(client *Client) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// If there's already a connection for this agent, close it first.
+	// If there's already a connection for this agent, log a warning if from different remote address and close it.
 	if existing, ok := r.clients[client.AgentID]; ok {
+		if existing.Conn != nil && client.Conn != nil {
+			oldAddr := existing.Conn.RemoteAddr().String()
+			newAddr := client.Conn.RemoteAddr().String()
+			if oldAddr != newAddr {
+				log.Printf("[REGISTRY] Warning: Agent %s reconnected from %s, replacing previous connection from %s. Verify only one agent instance is running.", client.AgentID, newAddr, oldAddr)
+			}
+		}
 		_ = existing.Close()
 	}
 
 	r.clients[client.AgentID] = client
 }
 
-// Unregister removes a client from the registry and closes its connection.
-// It is a no-op if no client is registered for the given AgentID.
-func (r *Registry) Unregister(agentID string) {
+// IsCurrentClient checks if the provided client pointer is the currently registered client for agentID.
+func (r *Registry) IsCurrentClient(agentID string, client *Client) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	current, ok := r.clients[agentID]
+	return ok && current == client
+}
+
+// UnregisterClient removes a client from the registry and closes its connection ONLY if it
+// is still the currently active client for the given AgentID. This prevents race conditions
+// where an older closing connection kills a newer reconnected client.
+func (r *Registry) UnregisterClient(agentID string, client *Client) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if client, ok := r.clients[agentID]; ok {
-		_ = client.Close()
+	if current, ok := r.clients[agentID]; ok {
+		if client != nil && current != client {
+			// A newer client has already registered, do not touch it
+			return false
+		}
+		_ = current.Close()
 		delete(r.clients, agentID)
+		return true
 	}
+	return false
+}
+
+// Unregister removes whatever client is currently registered for the given AgentID and closes it.
+func (r *Registry) Unregister(agentID string) {
+	r.UnregisterClient(agentID, nil)
 }
 
 // SendToAgent sends a JSON-encoded message to the Agent connected

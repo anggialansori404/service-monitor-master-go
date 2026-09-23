@@ -320,3 +320,57 @@ func TestNodeAgentDisabledNotifyNodeOffline(t *testing.T) {
 		t.Fatalf("expected 0 alerts when NotifyNodeOffline is false, got %d: %+v", len(*sentAlerts), *sentAlerts)
 	}
 }
+
+// 5. Test Node Disconnect When Institution Was Deleted from DB
+func TestNodeAgentDisconnectedWhenInstitutionDeleted(t *testing.T) {
+	inst := &models.Institution{
+		ID:                   "inst-deleted",
+		Name:                 "Lembaga Dihapus",
+		AgentID:              "agent-deleted",
+		NotifyNodeOffline:    true,
+		EnableTelegramAlerts: true,
+	}
+	h, repo, sentAlerts, _ := setupTestWSHandler(inst)
+	h.SetTimingConfig(20*time.Millisecond, 1*time.Second, 500*time.Millisecond, 3)
+
+	// Simulate institution deleted from database
+	repo.mu.Lock()
+	repo.institution = nil
+	repo.mu.Unlock()
+
+	// Agent disconnects
+	h.OnAgentDisconnected(inst)
+
+	// Wait past grace period
+	time.Sleep(50 * time.Millisecond)
+
+	// Should not send any alert or create any incident
+	if len(*sentAlerts) != 0 {
+		t.Fatalf("expected 0 alerts for deleted institution, got %d: %+v", len(*sentAlerts), *sentAlerts)
+	}
+	if len(repo.incidentsCreated) != 0 {
+		t.Fatalf("expected 0 incidents for deleted institution, got %d", len(repo.incidentsCreated))
+	}
+}
+
+// 6. Test CleanupInstitution
+func TestWSHandlerCleanupInstitution(t *testing.T) {
+	inst := &models.Institution{
+		ID:      "inst-cleanup",
+		Name:    "Lembaga Cleanup",
+		AgentID: "agent-cleanup",
+	}
+	h, _, _, _ := setupTestWSHandler(inst)
+	h.SetTimingConfig(1*time.Hour, 1*time.Hour, 1*time.Hour, 3)
+
+	// Disconnect to establish nodeState and timer
+	h.OnAgentDisconnected(inst)
+
+	// Now explicitly cleanup institution
+	h.CleanupInstitution(inst.ID, inst.AgentID)
+
+	if h.Registry.IsConnected(inst.AgentID) {
+		t.Errorf("agent should not be connected in registry after cleanup")
+	}
+}
+

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -104,6 +105,27 @@ func formatDowntime(d time.Duration) string {
 	return fmt.Sprintf("%d detik", seconds)
 }
 
+// CleanupInstitution cleans up all in-memory states, timers, and active connections for an institution.
+func (h *WSHandler) CleanupInstitution(instID, agentID string) {
+	if agentID != "" && h.Registry != nil {
+		if client := h.Registry.GetClient(agentID); client != nil {
+			_ = client.CloseWithReason(websocket.ClosePolicyViolation, "institution deleted")
+		}
+		h.Registry.Unregister(agentID)
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if state, exists := h.nodeStates[instID]; exists {
+		if state.disconnectTimer != nil {
+			state.disconnectTimer.Stop()
+			state.disconnectTimer = nil
+		}
+		delete(h.nodeStates, instID)
+	}
+	log.Printf("[NODE-WS] Cleaned up state and disconnected WS for deleted institution %s (agent %s)", instID, agentID)
+}
+
 // OnAgentConnected handles node recovery logic.
 func (h *WSHandler) OnAgentConnected(institution *models.Institution) {
 	instID := institution.ID
@@ -149,16 +171,32 @@ func (h *WSHandler) OnAgentConnected(institution *models.Institution) {
 }
 
 // OnAgentDisconnected handles node disconnect, grace period, and flapping detection.
-func (h *WSHandler) OnAgentDisconnected(institution *models.Institution) {
+func (h *WSHandler) OnAgentDisconnected(institution *models.Institution, client ...*ws.Client) {
 	agentID := institution.AgentID
 	instID := institution.ID
-	h.Registry.Unregister(agentID)
+	var c *ws.Client
+	if len(client) > 0 {
+		c = client[0]
+	}
+	h.Registry.UnregisterClient(agentID, c)
 	log.Printf("agent disconnected: %s (institution: %s)", agentID, institution.Name)
 
 	// Refresh institution in case settings or maintenance mode changed while agent was connected
-	if freshInst, err := h.Repo.GetInstitutionByID(instID); err == nil && freshInst != nil {
-		institution = freshInst
+	freshInst, err := h.Repo.GetInstitutionByID(instID)
+	if err != nil || freshInst == nil {
+		log.Printf("[NODE-WS] Institution %s (%s) not found in DB (deleted). Skipping offline alerts and cleaning up.", institution.Name, instID)
+		h.mu.Lock()
+		if state, exists := h.nodeStates[instID]; exists {
+			if state.disconnectTimer != nil {
+				state.disconnectTimer.Stop()
+				state.disconnectTimer = nil
+			}
+			delete(h.nodeStates, instID)
+		}
+		h.mu.Unlock()
+		return
 	}
+	institution = freshInst
 
 	// Check if node offline alerts are disabled for this institution
 	if !institution.NotifyNodeOffline {
@@ -353,6 +391,10 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 		_ = conn.SetReadDeadline(time.Now().Add(ws.PongWait))
 		return nil
 	})
+	conn.SetPingHandler(func(appData string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(ws.PongWait))
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(10*time.Second))
+	})
 
 	client := ws.NewClient(agentID, conn)
 	h.Registry.Register(client)
@@ -362,7 +404,12 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 	h.OnAgentConnected(institution)
 
 	defer func() {
-		h.OnAgentDisconnected(institution)
+		// Only trigger disconnect if this client was not superseded by a newer connection
+		if h.Registry.IsCurrentClient(agentID, client) {
+			h.OnAgentDisconnected(institution, client)
+		} else {
+			log.Printf("[NODE-WS] Agent %s (%s) connection closed, but superseded by newer connection. Skipping disconnect alert.", institution.Name, agentID)
+		}
 	}()
 
 	for {
@@ -422,6 +469,16 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			log.Printf("[SYNC] Received payload from AgentID: %s | Total Services: %d", agentID, len(req.Services))
 
 			now := time.Now().Local()
+
+			// Check if institution still exists in DB by updating ping first
+			if err := h.Repo.UpdateInstitutionPing(context.Background(), instID, req.HardwareInfo, now); err != nil {
+				if errors.Is(err, repository.ErrNotFound) || err.Error() == "record not found" {
+					log.Printf("[NODE-WS] Institution %s (%s) was deleted from DB. Closing WS connection for agent %s.", institution.Name, instID, agentID)
+					_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "institution deleted"))
+					break
+				}
+				log.Printf("[SYNC] Failed to update institution ping for %s: %v", instID, err)
+			}
 			
 			// Optimized Bulk Upsert - Created by Kang Anggi
 			oldServicesList, _, _ := h.Repo.GetServicesByInstitution(instID, "", "", 1, 5000)
@@ -456,7 +513,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			}
 
 			if err := h.Repo.BulkUpsertServices(context.Background(), servicesToUpsert); err != nil {
-				log.Printf("MONGODB BULK UPSERT ERROR in Sync (Agent WS): %v", err)
+				log.Printf("[SYNC] Bulk upsert services error (Agent WS): %v", err)
 			}
 
 			// Cleanup: delete services that are no longer reported by the agent
@@ -494,9 +551,6 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 				_ = h.Repo.CreateAuditLog(context.Background(), &auditLog)
 			}
 
-			if err := h.Repo.UpdateInstitutionPing(context.Background(), instID, req.HardwareInfo, now); err != nil {
-				log.Printf("UPDATE ERROR (UpdateInstitutionPing) in WS Sync: %v", err)
-			}
 			continue
 		}
 
@@ -519,6 +573,11 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			statusUpper := strings.ToUpper(strings.TrimSpace(status))
 			if statusUpper != "" {
 				if err := h.Repo.UpdateServiceStatus(context.Background(), instID, svcName, statusUpper, now); err != nil {
+					if errors.Is(err, repository.ErrNotFound) || err.Error() == "record not found" {
+						log.Printf("[NODE-WS] Institution %s (%s) was deleted from DB. Closing WS connection for agent %s.", institution.Name, instID, agentID)
+						_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "institution deleted"))
+						break
+					}
 					log.Printf("WS Alert: failed to update service status for %s/%s: %v", instID, svcName, err)
 				}
 			}

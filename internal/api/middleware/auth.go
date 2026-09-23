@@ -2,9 +2,11 @@ package middleware
 
 import (
 	"crypto/subtle"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"monitoring-master/internal/logutil"
@@ -14,6 +16,21 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
+
+var (
+	unknownAgentLogMu   sync.Mutex
+	lastUnknownAgentLog = make(map[string]time.Time)
+)
+
+func logUnknownAgent(agentID string) {
+	unknownAgentLogMu.Lock()
+	defer unknownAgentLogMu.Unlock()
+	lastLog, ok := lastUnknownAgentLog[agentID]
+	if !ok || time.Since(lastLog) > 5*time.Minute {
+		lastUnknownAgentLog[agentID] = time.Now()
+		log.Printf("[AGENT-AUTH] Unauthorized request: AgentID %s not found (institution may have been deleted or agent config needs updating)", agentID)
+	}
+}
 
 // AgentAuth validates the X-Agent-ID and X-Secret-Key headers against the
 // institutions table. On success it stores "InstitutionID" (uint) and
@@ -32,7 +49,12 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 
 		institution, err := repo.GetInstitutionByAgentID(c.Request.Context(), agentID)
 		if err != nil {
-			log.Printf("MONGODB AUTH FAILED: agent not found for AgentID: %s (err: %v)", agentID, err)
+			if errors.Is(err, repository.ErrNotFound) || err.Error() == "record not found" {
+				logUnknownAgent(agentID)
+				logutil.Debugf("[AGENT-AUTH] Agent not found or institution deleted for AgentID: %s", agentID)
+			} else {
+				log.Printf("[AGENT-AUTH] Database error checking AgentID: %s: %v", agentID, err)
+			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid agent credentials",
 			})
@@ -59,7 +81,7 @@ func AgentAuth(repo repository.Repository) gin.HandlerFunc {
 		}
 
 		if !matched {
-			log.Printf("MONGODB AUTH FAILED: secret mismatched for AgentID: %s", agentID)
+			log.Printf("[AGENT-AUTH] Secret mismatched for AgentID: %s", agentID)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid agent credentials",
 			})

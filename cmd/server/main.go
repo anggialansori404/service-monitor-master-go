@@ -259,6 +259,7 @@ func main() {
 	agentHandler := handlers.NewAgentHandler(repo, alertManager)
 	frontendHandler := handlers.NewFrontendHandler(repo, registry, cfg.JWTSecret, cfg.CaptchaSecret)
 	wsHandler := handlers.NewWSHandler(registry, repo, alertManager)
+	frontendHandler.WSHandler = wsHandler
 	settingHandler := handlers.NewSettingHandler(repo)
 	scheduleHandler := handlers.NewScheduleHandler(repo, sched)
 	scheduleHandler.Registry = registry

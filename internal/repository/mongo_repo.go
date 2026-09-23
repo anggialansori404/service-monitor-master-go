@@ -297,7 +297,7 @@ func (r *MongoRepository) DeleteInstitution(id string) error {
 	objID, _ := parseObjectID(id)
 	// Delete associated services
 	servicesColl := r.db.Collection("services")
-	_, err := servicesColl.DeleteMany(context.TODO(), bson.M{"institution_id": id}) // Note! Stored as string in service maybe? Or objID? Assuming string based on updated model
+	_, err := servicesColl.DeleteMany(context.TODO(), bson.M{"institution_id": id})
 	if err != nil {
 		return err
 	}
@@ -308,6 +308,16 @@ func (r *MongoRepository) DeleteInstitution(id string) error {
 	if err != nil {
 		return err
 	}
+
+	// Delete associated incident logs
+	incidentColl := r.db.Collection("incident_logs")
+	_, _ = incidentColl.DeleteMany(context.TODO(), bson.M{"institution_id": id})
+
+	// Delete associated schedules and schedule runs
+	schedulesColl := r.db.Collection("schedules")
+	_, _ = schedulesColl.DeleteMany(context.TODO(), bson.M{"institution_id": id})
+	runsColl := r.db.Collection("schedule_runs")
+	_, _ = runsColl.DeleteMany(context.TODO(), bson.M{"institution_id": id})
 
 	// Delete the institution
 	coll := r.db.Collection("institutions")

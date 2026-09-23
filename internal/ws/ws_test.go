@@ -131,3 +131,48 @@ func TestRegistry(t *testing.T) {
 		t.Errorf("expected 0 connected, got %d", registry.ConnectedCount())
 	}
 }
+
+func TestRegistry_UnregisterClientRaceCondition(t *testing.T) {
+	registry := NewRegistry()
+
+	client1 := NewClient("agent-race", nil)
+	client2 := NewClient("agent-race", nil)
+
+	// Step 1: client1 connects
+	registry.Register(client1)
+	if !registry.IsCurrentClient("agent-race", client1) {
+		t.Error("client1 should be current client")
+	}
+
+	// Step 2: client2 connects (reconnect / handover) and supersedes client1
+	registry.Register(client2)
+	if registry.IsCurrentClient("agent-race", client1) {
+		t.Error("client1 should no longer be current client")
+	}
+	if !registry.IsCurrentClient("agent-race", client2) {
+		t.Error("client2 should now be current client")
+	}
+
+	// Step 3: client1 goroutine finally exits and attempts to unregister
+	unregistered := registry.UnregisterClient("agent-race", client1)
+	if unregistered {
+		t.Error("UnregisterClient(client1) should have been rejected (returned false)")
+	}
+
+	// client2 MUST remain connected and untouched!
+	if !registry.IsConnected("agent-race") {
+		t.Error("client2 should still be connected")
+	}
+	if registry.GetClient("agent-race") != client2 {
+		t.Error("client2 should still be in registry")
+	}
+
+	// Step 4: client2 unregisters
+	unregistered2 := registry.UnregisterClient("agent-race", client2)
+	if !unregistered2 {
+		t.Error("UnregisterClient(client2) should have succeeded")
+	}
+	if registry.IsConnected("agent-race") {
+		t.Error("agent-race should now be disconnected")
+	}
+}

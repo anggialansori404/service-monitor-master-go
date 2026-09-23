@@ -143,9 +143,12 @@ func (r *SQLRepository) UpdateInstitution(inst *models.Institution) error {
 }
 
 func (r *SQLRepository) DeleteInstitution(id string) error {
-	// First delete associated services and audit logs to handle foreign keys if not cascaded
+	// First delete associated services, logs, and schedules to handle foreign keys and prevent orphaned records
 	r.db.Where("institution_id = ?", id).Delete(&models.Service{})
 	r.db.Where("institution_id = ?", id).Delete(&models.AuditLog{})
+	r.db.Where("institution_id = ?", id).Delete(&models.IncidentLog{})
+	r.db.Where("institution_id = ?", id).Delete(&models.ScheduleRun{})
+	r.db.Where("institution_id = ?", id).Delete(&models.Schedule{})
 
 	result := r.db.Where("id = ?", id).Delete(&models.Institution{})
 	if result.Error != nil {

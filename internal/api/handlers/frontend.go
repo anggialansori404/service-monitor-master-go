@@ -27,6 +27,7 @@ import (
 type FrontendHandler struct {
 	Repo          repository.Repository
 	Registry      *ws.Registry
+	WSHandler     *WSHandler
 	JWTSecret     string
 	CaptchaSecret string
 }
@@ -884,6 +885,21 @@ func (h *FrontendHandler) DeleteInstitution(c *gin.Context) {
 	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid institution id"})
 		return
+	}
+
+	// Fetch institution before deletion to clean up active WebSocket connections and timers
+	inst, err := h.Repo.GetInstitutionByID(id)
+	if err != nil && err != repository.ErrNotFound {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
+	if inst != nil {
+		if h.WSHandler != nil {
+			h.WSHandler.CleanupInstitution(inst.ID, inst.AgentID)
+		} else if h.Registry != nil && inst.AgentID != "" {
+			h.Registry.Unregister(inst.AgentID)
+		}
 	}
 
 	if err := h.Repo.DeleteInstitution(id); err != nil {

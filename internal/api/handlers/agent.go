@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -92,7 +93,7 @@ func (h *AgentHandler) Sync(c *gin.Context) {
 	}
 
 	if err := h.Repo.BulkUpsertServices(c.Request.Context(), servicesToUpsert); err != nil {
-		log.Printf("MONGODB BULK UPSERT ERROR in Sync (Agent HTTP): %v", err)
+		log.Printf("[SYNC] Bulk upsert services error (Agent HTTP): %v", err)
 	}
 
 	// Cleanup: delete services that are no longer reported by the agent
@@ -131,7 +132,12 @@ func (h *AgentHandler) Sync(c *gin.Context) {
 	}
 
 	if err := h.Repo.UpdateInstitutionPing(c.Request.Context(), instID, req.HardwareInfo, now); err != nil {
-		log.Printf("UPDATE ERROR (UpdateInstitutionPing) in Sync: %v", err)
+		if errors.Is(err, repository.ErrNotFound) || err.Error() == "record not found" {
+			log.Printf("[SYNC] Institution %s was deleted from DB. Aborting sync.", instID)
+			c.JSON(http.StatusNotFound, gin.H{"error": "institution not found"})
+			return
+		}
+		log.Printf("[SYNC] Failed to update institution ping for %s: %v", instID, err)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "sync processed", "count": len(req.Services)})
@@ -169,7 +175,7 @@ func (h *AgentHandler) Alert(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "service not found"})
 			return
 		}
-		log.Printf("MONGODB UPDATE ERROR (UpdateServiceStatus) in Alert: %v", err)
+		log.Printf("[ALERT] Update service status error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process alert"})
 		return
 	}
@@ -189,15 +195,19 @@ func (h *AgentHandler) Alert(c *gin.Context) {
 			CreatedAt:     now,
 		}
 		if err := h.Repo.CreateAuditLog(c.Request.Context(), &auditLog); err != nil {
-			log.Printf("MONGODB INSERT ERROR (CreateAuditLog) in Alert: %v", err)
+			log.Printf("[ALERT] Create audit log error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process alert"})
 			return
 		}
 	}
 	// Update institution's last_ping here too to keep it fresh (no hardware info for alert route).
 	if err := h.Repo.UpdateInstitutionPing(c.Request.Context(), instID, nil, now); err != nil {
-		// Don't fail the request just because ping update failed.
-		log.Printf("UPDATE ERROR (UpdateInstitutionPing) in Alert for institution %s: %v", instID, err)
+		if errors.Is(err, repository.ErrNotFound) || err.Error() == "record not found" {
+			log.Printf("[ALERT] Institution %s was deleted from DB. Aborting alert.", instID)
+			c.JSON(http.StatusNotFound, gin.H{"error": "institution not found"})
+			return
+		}
+		log.Printf("[ALERT] Failed to update institution ping for %s: %v", instID, err)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "alert processed"})
