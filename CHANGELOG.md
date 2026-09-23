@@ -1,11 +1,45 @@
-# Changelog — Service Monitoring
+# Changelog - Service Monitoring
 
 > Dokumen ini mencatat semua perubahan yang telah dilakukan pada project.
 > Baca dokumen ini sebelum menambah fitur atau melakukan perubahan besar.
 
 ---
 
-## [2026-04-24] — Session: Bug Fixes, UX Improvements, Config
+## [v1.2.5] - 2026-09-24 - Agent Credential Trimming & Auth Diagnostics
+
+---
+
+### service-monitor-master-go
+
+#### fix(auth): Trim whitespace pada Agent ID & Secret Key, serta log Client IP saat auth gagal
+- **Files**: internal/api/middleware/auth.go
+- **Problem**: Header X-Agent-ID dan X-Secret-Key belum melewati strings.TrimSpace(), sehingga spasi/newline saat copy-paste ke config agen menyebabkan record not found atau mismatch di DB.
+- **Fix**: Menggunakan strings.TrimSpace pada agentID, secretKey, dan storedSecret. Menambahkan pencatatan Client IP dan panjang karakter key pada log Master untuk diagnosa.
+
+---
+
+## [v1.2.4] - 2026-09-23 - WS Disconnect Race Condition & Institution Cleanup
+
+---
+
+### service-monitor-master-go
+
+#### fix(ws): Perbaiki race condition saat unregister client koneksi WebSocket
+- **Files**: internal/ws/registry.go, internal/api/handlers/ws.go, internal/ws/client.go
+- **Problem**: Saat agent reconnect dengan cepat, koneksi lama yang sedang exit dapat memicu unregister dan mematikan koneksi baru yang baru saja masuk.
+- **Fix**: Menambahkan UnregisterClient(agentID, client) dan IsCurrentClient agar koneksi lama tidak mematikan client baru. Menambahkan CloseWithReason(ClosePolicyViolation).
+
+#### fix(institution): Bersihkan koneksi WebSocket dan cascade data saat institusi dihapus
+- **Files**: internal/api/handlers/frontend.go, internal/repository/mongo_repo.go, internal/repository/sql_repo.go
+- **Fix**: Memanggil CleanupInstitution sebelum delete di DB agar koneksi WS ditutup dengan rapi dan timer node offline dibatalkan. Menghapus cascading service, incident log, schedule, dan schedule runs.
+
+#### fix(auth): Throttle log unauthorized agent
+- **Files**: internal/api/middleware/auth.go
+- **Fix**: Throttling pencatatan log unauthorized agent ke 1x per 5 menit per ID agar terminal tidak dibanjiri spam reconnect.
+
+---
+
+## [2026-04-24]  Session: Bug Fixes, UX Improvements, Config
 
 ---
 
@@ -60,7 +94,7 @@
 
 #### fix(frontend): Hapus Node Security card yang berisi data palsu
 - **File**: `src/app/(protected)/institutions/[id]/page.tsx`
-- **Problem**: Card "Node Security" menampilkan `~14ms` latency dan `99.9%` uptime yang hardcoded — bukan data real.
+- **Problem**: Card "Node Security" menampilkan `~14ms` latency dan `99.9%` uptime yang hardcoded  bukan data real.
 - **Fix**: Hapus card sepenuhnya. Card "Node Hardware Analytics" tetap ada.
 
 #### fix(frontend): Hapus kolom Category yang selalu "System"
@@ -71,12 +105,12 @@
 #### fix(frontend): Tambah konfirmasi dialog sebelum restart service
 - **File**: `src/app/(protected)/institutions/[id]/page.tsx`
 - **Change**: Restart button sekarang membuka `AlertDialog` konfirmasi terlebih dahulu. User harus klik "Restart" di dialog untuk melanjutkan. Klik "Batal" membatalkan aksi.
-- **State baru**: `confirmRestart: string | null` — menyimpan nama service yang akan di-restart.
+- **State baru**: `confirmRestart: string | null`  menyimpan nama service yang akan di-restart.
 
 #### fix(frontend): Ganti live clock 1s interval dengan last-updated timestamp
 - **File**: `src/app/(protected)/dashboard/page.tsx`
 - **Problem**: `setInterval(..., 1000)` untuk live clock menyebabkan re-render setiap detik.
-- **Fix**: Hapus interval, ganti dengan `formatDistanceToNow(summaryQuery.dataUpdatedAt)` — menampilkan "Updated X ago".
+- **Fix**: Hapus interval, ganti dengan `formatDistanceToNow(summaryQuery.dataUpdatedAt)`  menampilkan "Updated X ago".
 
 #### feat(frontend): Metric cards Total Institutions & Online Nodes bisa di-klik
 - **File**: `src/app/(protected)/dashboard/page.tsx`
@@ -93,7 +127,7 @@
 - **Usage**: `text-[color:var(--status-up)]`, `bg-[color:var(--status-up)]/20`
 
 #### fix(frontend): Hapus Header.tsx legacy (tidak dipakai)
-- **File**: `src/components/layout/Header.tsx` — **DIHAPUS**
+- **File**: `src/components/layout/Header.tsx`  **DIHAPUS**
 - **Note**: Header sekarang inline di `src/app/(protected)/layout.tsx`. File `Header.tsx` tidak diimport di mana pun.
 
 #### feat(frontend): Toggle auto_restart via Switch UI di services table
@@ -113,7 +147,7 @@
 
 #### fix(frontend): Session expired dialog, tidak auto-logout
 - **File**: `src/components/providers/SessionProvider.tsx`
-- **Problem**: Ketika session timeout habis, `handleLogout()` langsung dipanggil — `removeToken()` + redirect ke `/login` tanpa interaksi user.
+- **Problem**: Ketika session timeout habis, `handleLogout()` langsung dipanggil  `removeToken()` + redirect ke `/login` tanpa interaksi user.
 - **Fix**: Pisahkan `handleExpired()` dari `handleLogout()`. Saat timeout habis, tampilkan dialog "Session Expired" yang menunggu user klik "Login Again". Tidak ada auto-redirect.
 - **Behavior baru**:
   - Menit ke-(timeout-2): Dialog warning muncul ? "Stay Logged In" atau "Logout Now"
@@ -125,10 +159,10 @@
 - **File**: `.env.example` (baru)
 - **Isi**: Dokumentasi semua env vars yang dipakai beserta keterangan dan default value.
 - **Env vars**:
-  - `NEXT_PUBLIC_API_URL` — URL backend API (wajib)
-  - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` — Cloudflare Turnstile site key (wajib)
-  - `NEXT_PUBLIC_SESSION_TIMEOUT` — Durasi session timeout dalam menit (default: 30)
-  - `NEXT_PUBLIC_TIMEZONE` — Timezone display (default: Asia/Jakarta)
+  - `NEXT_PUBLIC_API_URL`  URL backend API (wajib)
+  - `NEXT_PUBLIC_TURNSTILE_SITE_KEY`  Cloudflare Turnstile site key (wajib)
+  - `NEXT_PUBLIC_SESSION_TIMEOUT`  Durasi session timeout dalam menit (default: 30)
+  - `NEXT_PUBLIC_TIMEZONE`  Timezone display (default: Asia/Jakarta)
 - **Note**: Untuk Vercel, set via Dashboard ? Settings ? Environment Variables.
 
 ---
@@ -179,11 +213,11 @@ Expired dialog ? user klik "Login Again" ? removeToken() + redirect /login
 
 ### Env Vars Master (service-monitor-master-go)
 Lihat `service-monitor-master-go/.env.example` untuk daftar lengkap. Variabel wajib:
-- `BOT_TOKEN` — Telegram bot token
-- `JWT_SECRET` — Secret untuk signing JWT
-- `DB_DRIVER` — `mongo`, `postgres`, atau `mysql`
+- `BOT_TOKEN`  Telegram bot token
+- `JWT_SECRET`  Secret untuk signing JWT
+- `DB_DRIVER`  `mongo`, `postgres`, atau `mysql`
 
 ### Env Vars Frontend (monitoring-service-hub)
 Lihat `monitoring-service-hub/.env.example` untuk daftar lengkap. Variabel wajib:
-- `NEXT_PUBLIC_API_URL` — URL backend API
-- `NEXT_PUBLIC_TURNSTILE_SITE_KEY` — Cloudflare Turnstile site key
+- `NEXT_PUBLIC_API_URL`  URL backend API
+- `NEXT_PUBLIC_TURNSTILE_SITE_KEY`  Cloudflare Turnstile site key
