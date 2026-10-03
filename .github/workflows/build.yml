@@ -17,11 +17,13 @@ jobs:
       - name: Build linux/amd64 (untuk Ubuntu & CentOS)
         run: |
           GOOS=linux GOARCH=amd64 go build -o monitoring-server-linux-amd64.bin cmd/server/main.go
+          ls -lh monitoring-server-linux-amd64.bin
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: monitoring-server-linux-amd64
-          path: monitoring-server-linux-amd64.bin
+          path: ${{ github.workspace }}/monitoring-server-linux-amd64.bin
+          if-no-files-found: error
       - name: Notify Telegram
         if: always()
         run: |
