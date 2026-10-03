@@ -18,11 +18,19 @@ jobs:
         run: |
           GOOS=linux GOARCH=amd64 go build -o monitoring-server-linux-amd64.bin cmd/server/main.go
           ls -lh monitoring-server-linux-amd64.bin
+      - name: Compress binary
+        run: |
+          gzip -9 -k monitoring-server-linux-amd64.bin
+          ls -lh monitoring-server-linux-amd64.bin.gz
+      - name: Compress binary
+        run: |
+          gzip -9 -k monitoring-server-linux-amd64.bin
+          ls -lh monitoring-server-linux-amd64.bin.gz
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: monitoring-server-linux-amd64
-          path: ${{ github.workspace }}/monitoring-server-linux-amd64.bin
+          path: ${{ github.workspace }}/monitoring-server-linux-amd64.bin.gz
           if-no-files-found: error
       - name: Notify Telegram
         if: always()
@@ -39,5 +47,5 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
             -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -F message_thread_id="${{ secrets.TELEGRAM_TOPIC_ID }}" \
-            -F document=@"monitoring-server-linux-amd64.bin" \
-            -F caption="📦 monitoring-server-linux-amd64.bin — ${{ github.ref_name }} @ ${{ github.sha }}"
+            -F document=@"monitoring-server-linux-amd64.bin.gz" \
+            -F caption="📦 monitoring-server-linux-amd64.bin.gz — ${{ github.ref_name }} @ ${{ github.sha }}"
