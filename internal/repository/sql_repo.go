@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"monitoring-master/internal/crypto"
 	"monitoring-master/internal/models"
 
 	"github.com/google/uuid"
@@ -14,12 +15,74 @@ import (
 
 // SQLRepository implements Repository using GORM.
 type SQLRepository struct {
-	db *gorm.DB
+	db    *gorm.DB
+	crypt *crypto.Cipher
 }
 
 // NewSQLRepository creates a new SQLRepository.
 func NewSQLRepository(db *gorm.DB) *SQLRepository {
 	return &SQLRepository{db: db}
+}
+
+// SetCryptor enables at-rest encryption of credential fields (agent secret
+// keys, Telegram bot tokens). Nil disables encryption (plaintext passthrough).
+func (r *SQLRepository) SetCryptor(c *crypto.Cipher) {
+	r.crypt = c
+}
+
+// MigrateSecrets encrypts legacy plaintext credential fields. Idempotent;
+// safe to run on every startup. Returns the number of rows updated.
+func (r *SQLRepository) MigrateSecrets(ctx context.Context) (int, error) {
+	if r.crypt == nil {
+		return 0, nil
+	}
+	migrated := 0
+	var institutions []models.Institution
+	if err := r.db.WithContext(ctx).Find(&institutions).Error; err != nil {
+		return migrated, err
+	}
+	for i := range institutions {
+		inst := &institutions[i]
+		changed := false
+		if inst.SecretKey != "" && !crypto.IsEncrypted(inst.SecretKey) {
+			enc, err := r.crypt.Encrypt(inst.SecretKey)
+			if err != nil {
+				return migrated, err
+			}
+			inst.SecretKey = enc
+			changed = true
+		}
+		if inst.TelegramBotToken != "" && !crypto.IsEncrypted(inst.TelegramBotToken) {
+			enc, err := r.crypt.Encrypt(inst.TelegramBotToken)
+			if err != nil {
+				return migrated, err
+			}
+			inst.TelegramBotToken = enc
+			changed = true
+		}
+		if changed {
+			if err := r.db.WithContext(ctx).Model(&models.Institution{}).Where("id = ?", inst.ID).
+				Select("secret_key", "telegram_bot_token").Updates(inst).Error; err != nil {
+				return migrated, err
+			}
+			migrated++
+		}
+	}
+	var setting models.GlobalSetting
+	if err := r.db.WithContext(ctx).First(&setting).Error; err == nil {
+		if setting.TelegramBotToken != "" && !crypto.IsEncrypted(setting.TelegramBotToken) {
+			enc, err := r.crypt.Encrypt(setting.TelegramBotToken)
+			if err != nil {
+				return migrated, err
+			}
+			if err := r.db.WithContext(ctx).Model(&models.GlobalSetting{}).Where("id = ?", setting.ID).
+				Select("telegram_bot_token").Updates(map[string]interface{}{"telegram_bot_token": enc}).Error; err != nil {
+				return migrated, err
+			}
+			migrated++
+		}
+	}
+	return migrated, nil
 }
 
 // --- Helper Functions ---
@@ -39,6 +102,7 @@ func (r *SQLRepository) GetInstitutionByAgentID(ctx context.Context, agentID str
 		}
 		return nil, err
 	}
+	decryptInstitutionSecrets(r.crypt, &inst)
 	return &inst, nil
 }
 
@@ -51,6 +115,7 @@ func (r *SQLRepository) GetInstitutionByID(id string) (*models.Institution, erro
 		}
 		return nil, err
 	}
+	decryptInstitutionSecrets(r.crypt, &inst)
 	return &inst, nil
 }
 
@@ -63,6 +128,7 @@ func (r *SQLRepository) GetInstitutionByName(name string) (*models.Institution, 
 		}
 		return nil, err
 	}
+	decryptInstitutionSecrets(r.crypt, &inst)
 	return &inst, nil
 }
 
@@ -72,6 +138,9 @@ func (r *SQLRepository) GetAllInstitutions() ([]models.Institution, error) {
 	err := r.db.Preload("Services").Find(&institutions).Error
 	if err != nil {
 		return nil, err
+	}
+	for i := range institutions {
+		decryptInstitutionSecrets(r.crypt, &institutions[i])
 	}
 	return institutions, nil
 }
@@ -124,15 +193,23 @@ func (r *SQLRepository) CreateInstitution(inst *models.Institution) error {
 	if inst.ID == "" {
 		inst.ID = generateID()
 	}
-	return r.db.Create(inst).Error
+	cp := *inst
+	if err := encryptInstitutionSecrets(r.crypt, &cp); err != nil {
+		return err
+	}
+	return r.db.Create(&cp).Error
 }
 
 func (r *SQLRepository) UpdateInstitution(inst *models.Institution) error {
 	if inst.ID == "" {
 		return ErrNotFound
 	}
+	cp := *inst
+	if err := encryptInstitutionSecrets(r.crypt, &cp); err != nil {
+		return err
+	}
 	// Select("*").Omit("Services") ensures zero-values (e.g. false, empty string) are persisted
-	result := r.db.Model(&models.Institution{}).Where("id = ?", inst.ID).Select("*").Omit("Services").Updates(inst)
+	result := r.db.Model(&models.Institution{}).Where("id = ?", cp.ID).Select("*").Omit("Services").Updates(&cp)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -398,15 +475,16 @@ func (r *SQLRepository) PurgeSecurityLogs(ctx context.Context, olderThan time.Ti
 // --- Auth ---
 
 func (r *SQLRepository) GetInstitutionByAgentIDAndSecret(ctx context.Context, agentID, secretKey string) (*models.Institution, error) {
-	var inst models.Institution
-	err := r.db.WithContext(ctx).Where("agent_id = ? AND secret_key = ?", agentID, secretKey).First(&inst).Error
+	// NOTE: secret_key is encrypted at rest, so it cannot be matched in the
+	// query. Fetch by agent_id and compare in constant time instead.
+	inst, err := r.GetInstitutionByAgentID(ctx, agentID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
 		return nil, err
 	}
-	return &inst, nil
+	if !secretsMatch(r.crypt, inst.SecretKey, secretKey) {
+		return nil, ErrNotFound
+	}
+	return inst, nil
 }
 
 // --- User ---
@@ -589,28 +667,33 @@ func (r *SQLRepository) GetSettings(ctx context.Context) (*models.GlobalSetting,
 		}
 		return nil, err
 	}
+	decryptSettingSecrets(r.crypt, &setting)
 	return &setting, nil
 }
 
 func (r *SQLRepository) UpdateSettings(ctx context.Context, setting *models.GlobalSetting) error {
+	cp := *setting
+	if err := encryptSettingSecrets(r.crypt, &cp); err != nil {
+		return err
+	}
 	var existing models.GlobalSetting
 	err := r.db.WithContext(ctx).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if setting.ID == "" {
-			setting.ID = generateID()
+		if cp.ID == "" {
+			cp.ID = generateID()
 		}
-		setting.UpdatedAt = time.Now().Local()
-		return r.db.WithContext(ctx).Create(setting).Error
+		cp.UpdatedAt = time.Now().Local()
+		return r.db.WithContext(ctx).Create(&cp).Error
 	} else if err != nil {
 		return err
 	}
 
-	existing.TelegramBotToken = setting.TelegramBotToken
-	existing.TelegramChatID = setting.TelegramChatID
-	existing.TelegramTopicID = setting.TelegramTopicID
-	existing.EnableTelegramAlerts = setting.EnableTelegramAlerts
-	existing.EnableDailyDigest = setting.EnableDailyDigest
-	existing.DailyDigestTime = setting.DailyDigestTime
+	existing.TelegramBotToken = cp.TelegramBotToken
+	existing.TelegramChatID = cp.TelegramChatID
+	existing.TelegramTopicID = cp.TelegramTopicID
+	existing.EnableTelegramAlerts = cp.EnableTelegramAlerts
+	existing.EnableDailyDigest = cp.EnableDailyDigest
+	existing.DailyDigestTime = cp.DailyDigestTime
 	existing.UpdatedAt = time.Now().Local()
 
 	return r.db.WithContext(ctx).Save(&existing).Error

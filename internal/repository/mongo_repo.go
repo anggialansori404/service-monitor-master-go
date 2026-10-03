@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"monitoring-master/internal/crypto"
 	"monitoring-master/internal/models"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -15,12 +16,19 @@ import (
 
 // MongoRepository implements Repository using the MongoDB v2 driver.
 type MongoRepository struct {
-	db *mongo.Database
+	db    *mongo.Database
+	crypt *crypto.Cipher
 }
 
 // NewMongoRepository creates a new MongoRepository.
 func NewMongoRepository(db *mongo.Database) *MongoRepository {
 	return &MongoRepository{db: db}
+}
+
+// SetCryptor enables at-rest encryption of credential fields (agent secret
+// keys, Telegram bot tokens). Nil disables encryption (plaintext passthrough).
+func (r *MongoRepository) SetCryptor(c *crypto.Cipher) {
+	r.crypt = c
 }
 
 // --- Helper Functions ---
@@ -51,7 +59,7 @@ type mongoInstitutionDoc struct {
 	MaintenanceUntil     *time.Time           `bson:"maintenance_until,omitempty"`
 }
 
-func (doc *mongoInstitutionDoc) toModel() *models.Institution {
+func (doc *mongoInstitutionDoc) toModel(crypt *crypto.Cipher) *models.Institution {
 	var docID string
 	if oid, ok := doc.ID.(bson.ObjectID); ok {
 		docID = oid.Hex()
@@ -66,7 +74,7 @@ func (doc *mongoInstitutionDoc) toModel() *models.Institution {
 		notifyNode = *doc.NotifyNodeOffline
 	}
 
-	return &models.Institution{
+	m := &models.Institution{
 		ID:                   docID,
 		Name:                 doc.Name,
 		AgentID:              doc.AgentID,
@@ -84,6 +92,8 @@ func (doc *mongoInstitutionDoc) toModel() *models.Institution {
 		InMaintenance:        doc.InMaintenance,
 		MaintenanceUntil:     doc.MaintenanceUntil,
 	}
+	decryptInstitutionSecrets(crypt, m)
+	return m
 }
 
 // --- Institution ---
@@ -98,7 +108,7 @@ func (r *MongoRepository) GetInstitutionByAgentID(ctx context.Context, agentID s
 		}
 		return nil, err
 	}
-	return doc.toModel(), nil
+	return doc.toModel(r.crypt), nil
 }
 
 func (r *MongoRepository) GetInstitutionByID(id string) (*models.Institution, error) {
@@ -113,7 +123,7 @@ func (r *MongoRepository) GetInstitutionByID(id string) (*models.Institution, er
 		}
 		return nil, err
 	}
-	return doc.toModel(), nil
+	return doc.toModel(r.crypt), nil
 }
 
 func (r *MongoRepository) GetInstitutionByName(name string) (*models.Institution, error) {
@@ -126,7 +136,7 @@ func (r *MongoRepository) GetInstitutionByName(name string) (*models.Institution
 		}
 		return nil, err
 	}
-	return doc.toModel(), nil
+	return doc.toModel(r.crypt), nil
 }
 
 func (r *MongoRepository) GetAllInstitutions() ([]models.Institution, error) {
@@ -151,7 +161,7 @@ func (r *MongoRepository) GetAllInstitutions() ([]models.Institution, error) {
 
 	institutions := make([]models.Institution, len(docs))
 	for i := range docs {
-		institutions[i] = *docs[i].toModel()
+		institutions[i] = *docs[i].toModel(r.crypt)
 	}
 
 	// 2. Loop dan ambil Services untuk tiap Institution
@@ -257,21 +267,33 @@ func (r *MongoRepository) CreateInstitution(inst *models.Institution) error {
 	if inst.ID == "" {
 		inst.ID = bson.NewObjectID().Hex()
 	}
-	_, err := coll.InsertOne(context.TODO(), inst)
+	cp := *inst
+	if err := encryptInstitutionSecrets(r.crypt, &cp); err != nil {
+		return err
+	}
+	_, err := coll.InsertOne(context.TODO(), &cp)
 	return err
 }
 
 func (r *MongoRepository) UpdateInstitution(inst *models.Institution) error {
 	objID, _ := parseObjectID(inst.ID)
+	secretKey, err := encryptValue(r.crypt, inst.SecretKey)
+	if err != nil {
+		return err
+	}
+	botToken, err := encryptValue(r.crypt, inst.TelegramBotToken)
+	if err != nil {
+		return err
+	}
 	// First encode to string, re-decode to intermediate to handle ID overwrite if any. We will use a BSON mapping directly.
 	mapped := bson.M{
 		"name":                   inst.Name,
 		"agent_id":               inst.AgentID,
-		"secret_key":             inst.SecretKey,
+		"secret_key":             secretKey,
 		"is_active":              inst.IsActive,
 		"last_ping":              inst.LastPing,
 		"use_custom_telegram":    inst.UseCustomTelegram,
-		"telegram_bot_token":     inst.TelegramBotToken,
+		"telegram_bot_token":     botToken,
 		"telegram_chat_id":       inst.TelegramChatID,
 		"telegram_topic_id":      inst.TelegramTopicID,
 		"enable_telegram_alerts": inst.EnableTelegramAlerts,
@@ -696,16 +718,16 @@ func (r *MongoRepository) PurgeSecurityLogs(ctx context.Context, olderThan time.
 // --- Auth ---
 
 func (r *MongoRepository) GetInstitutionByAgentIDAndSecret(ctx context.Context, agentID, secretKey string) (*models.Institution, error) {
-	coll := r.db.Collection("institutions")
-	var doc mongoInstitutionDoc
-	err := coll.FindOne(ctx, bson.M{"agent_id": agentID, "secret_key": secretKey}).Decode(&doc)
+	// NOTE: secret_key is encrypted at rest, so it cannot be matched in the
+	// query. Fetch by agent_id and compare in constant time instead.
+	inst, err := r.GetInstitutionByAgentID(ctx, agentID)
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return nil, ErrNotFound
-		}
 		return nil, err
 	}
-	return doc.toModel(), nil
+	if !secretsMatch(r.crypt, inst.SecretKey, secretKey) {
+		return nil, ErrNotFound
+	}
+	return inst, nil
 }
 
 // --- User ---
@@ -1109,13 +1131,18 @@ func (r *MongoRepository) GetSettings(ctx context.Context) (*models.GlobalSettin
 		DailyDigestTime:      doc.DailyDigestTime,
 		UpdatedAt:            doc.UpdatedAt,
 	}
+	decryptSettingSecrets(r.crypt, &setting)
 	return &setting, nil
 }
 
 func (r *MongoRepository) UpdateSettings(ctx context.Context, setting *models.GlobalSetting) error {
+	botToken, err := encryptValue(r.crypt, setting.TelegramBotToken)
+	if err != nil {
+		return err
+	}
 	update := bson.M{
 		"$set": bson.M{
-			"telegram_bot_token":     setting.TelegramBotToken,
+			"telegram_bot_token":     botToken,
 			"telegram_chat_id":       setting.TelegramChatID,
 			"telegram_topic_id":      setting.TelegramTopicID,
 			"enable_telegram_alerts": setting.EnableTelegramAlerts,
@@ -1125,7 +1152,7 @@ func (r *MongoRepository) UpdateSettings(ctx context.Context, setting *models.Gl
 		},
 	}
 	opts := options.UpdateOne().SetUpsert(true)
-	_, err := r.db.Collection("settings").UpdateOne(ctx, bson.M{}, update, opts)
+	_, err = r.db.Collection("settings").UpdateOne(ctx, bson.M{}, update, opts)
 	return err
 }
 
@@ -1560,4 +1587,66 @@ func (r *MongoRepository) GetUptimeStats(ctx context.Context, instID string, day
 		TotalDays:     days,
 		Days:          buckets,
 	}, nil
+}
+
+// MigrateSecrets encrypts legacy plaintext credential fields (secret_key,
+// telegram_bot_token) for institutions and global settings. It is idempotent
+// and safe to run on every startup. Returns the number of documents updated.
+func (r *MongoRepository) MigrateSecrets(ctx context.Context) (int, error) {
+	if r.crypt == nil {
+		return 0, nil
+	}
+	migrated := 0
+
+	// Institutions
+	instColl := r.db.Collection("institutions")
+	cursor, err := instColl.Find(ctx, bson.M{})
+	if err != nil {
+		return migrated, err
+	}
+	for cursor.Next(ctx) {
+		var doc bson.M
+		if err := cursor.Decode(&doc); err != nil {
+			continue
+		}
+		set := bson.M{}
+		if v, _ := doc["secret_key"].(string); v != "" && !crypto.IsEncrypted(v) {
+			if enc, err := r.crypt.Encrypt(v); err == nil {
+				set["secret_key"] = enc
+			} else {
+				return migrated, err
+			}
+		}
+		if v, _ := doc["telegram_bot_token"].(string); v != "" && !crypto.IsEncrypted(v) {
+			if enc, err := r.crypt.Encrypt(v); err == nil {
+				set["telegram_bot_token"] = enc
+			} else {
+				return migrated, err
+			}
+		}
+		if len(set) > 0 {
+			if _, err := instColl.UpdateOne(ctx, bson.M{"_id": doc["_id"]}, bson.M{"$set": set}); err != nil {
+				return migrated, err
+			}
+			migrated++
+		}
+	}
+	_ = cursor.Close(ctx)
+
+	// Global settings
+	setColl := r.db.Collection("settings")
+	var sdoc bson.M
+	if err := setColl.FindOne(ctx, bson.M{}).Decode(&sdoc); err == nil {
+		if v, _ := sdoc["telegram_bot_token"].(string); v != "" && !crypto.IsEncrypted(v) {
+			enc, err := r.crypt.Encrypt(v)
+			if err != nil {
+				return migrated, err
+			}
+			if _, err := setColl.UpdateOne(ctx, bson.M{"_id": sdoc["_id"]}, bson.M{"$set": bson.M{"telegram_bot_token": enc}}); err != nil {
+				return migrated, err
+			}
+			migrated++
+		}
+	}
+	return migrated, nil
 }
