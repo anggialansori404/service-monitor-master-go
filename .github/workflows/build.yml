@@ -20,11 +20,7 @@ jobs:
           ls -lh monitoring-server-linux-amd64.bin
       - name: Compress binary
         run: |
-          gzip -9 -k monitoring-server-linux-amd64.bin
-          ls -lh monitoring-server-linux-amd64.bin.gz
-      - name: Compress binary
-        run: |
-          gzip -9 -k monitoring-server-linux-amd64.bin
+          gzip -9 -kf monitoring-server-linux-amd64.bin
           ls -lh monitoring-server-linux-amd64.bin.gz
       - name: Upload artifact
         uses: actions/upload-artifact@v4
