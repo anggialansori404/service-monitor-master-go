@@ -16,7 +16,7 @@ jobs:
           cache: true
       - name: Build linux/amd64 (untuk Ubuntu & CentOS)
         run: |
-          GOOS=linux GOARCH=amd64 go build -o monitoring-server-linux-amd64.bin cmd/server/main.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags '-extldflags "-static"' -o monitoring-server-linux-amd64.bin cmd/server/main.go
           ls -lh monitoring-server-linux-amd64.bin
       - name: Compress binary with UPX
         run: |
