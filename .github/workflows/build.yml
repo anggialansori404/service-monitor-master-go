@@ -1,0 +1,75 @@
+name: Build binaries
+
+on:
+  push:
+    branches: [security-fixes]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Build linux/amd64 (untuk Ubuntu & CentOS)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags '-extldflags "-static"' -o monitoring-server-linux-amd64.bin cmd/server/main.go
+          ls -lh monitoring-server-linux-amd64.bin
+      - name: Compress binary with UPX
+        run: |
+          sudo apt-get install -y upx-ucl
+          upx --best --lzma monitoring-server-linux-amd64.bin
+          ls -lh monitoring-server-linux-amd64.bin
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-server-linux-amd64
+          path: ${{ github.workspace }}/monitoring-server-linux-amd64.bin
+          if-no-files-found: error
+      - name: Notify Telegram
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d message_thread_id="${{ secrets.TELEGRAM_TOPIC_ID }}" \
+            -d text="🔨 Build master [$STATUS] — ${{ github.ref_name }} @ ${{ github.sha }}" \
+            -d parse_mode="HTML"
+      - name: Upload binary to Telegram
+        if: success()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
+            -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -F message_thread_id="${{ secrets.TELEGRAM_TOPIC_ID }}" \
+            -F document=@"monitoring-server-linux-amd64.bin" \
+            -F caption="📦 monitoring-server-linux-amd64.bin (UPX) — ${{ github.ref_name }} @ ${{ github.sha }}"
+
+  # Build & push Docker image ke GHCR (repo private → image private by default).
+  # Server tinggal: docker login ghcr.io + docker compose pull.
+  # .env TIDAK dibake ke image (diinject saat runtime via env_file).
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login ke GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/anggialansori404/service-monitor-master:latest
+            ghcr.io/anggialansori404/service-monitor-master:${{ github.sha }}

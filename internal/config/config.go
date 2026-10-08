@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -32,6 +33,12 @@ type Config struct {
 	AuditLogRetentionDays    int
 	SecurityLogRetentionDays  int
 	ScheduleRunRetentionDays int
+
+	// AllowedOrigins is a comma-separated list of origins permitted to open
+	// WebSocket connections (e.g. "https://monitor.example.com"). Empty means
+	// only same-origin (Origin host == request host) or non-browser clients
+	// (no Origin header, like the Go agent) are allowed.
+	AllowedOrigins []string
 }
 
 // LoadConfig loads configuration from a .env file (if present) and
@@ -64,6 +71,8 @@ func LoadConfig() *Config {
 		AuditLogRetentionDays:    getEnvAsInt("AUDIT_LOG_RETENTION_DAYS", 30),
 		SecurityLogRetentionDays:  getEnvAsInt("SECURITY_LOG_RETENTION_DAYS", 30),
 		ScheduleRunRetentionDays: getEnvAsInt("SCHEDULE_RUN_RETENTION_DAYS", 30),
+
+		AllowedOrigins: parseCSV("ALLOWED_ORIGINS"),
 	}
 
 	if cfg.JWTSecret == "" {
@@ -112,6 +121,17 @@ func getEnvAsInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// parseCSV splits a comma-separated env var into trimmed non-empty items.
+func parseCSV(key string) []string {
+	var out []string
+	for _, p := range strings.Split(os.Getenv(key), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // GetDSN returns the correctly formatted DSN string based on DBDriver.

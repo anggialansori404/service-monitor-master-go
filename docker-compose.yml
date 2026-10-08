@@ -1,0 +1,34 @@
+# service-monitor-master-go — docker compose
+# MongoDB dianggap SUDAH ADA (di luar compose ini).
+# Isi .env dulu dari .env.example, lalu:  docker compose up -d --build
+
+services:
+  master:
+    # Image dari GHCR (dibangun otomatis oleh GitHub Actions tiap push).
+    # Untuk build lokal dari source: ganti jadi `build: .`
+    image: ghcr.io/anggialansori404/service-monitor-master:latest
+    container_name: svcmon-master
+    restart: unless-stopped
+    # Hanya bind ke localhost — yang expose ke publik adalah nginx.
+    # Port mengikuti $PORT (default 8080). Untuk migrasi dari VPS lama,
+    # set PORT=4001 di .env agar sama seperti sebelumnya.
+    ports:
+      - "127.0.0.1:${PORT:-8080}:${PORT:-8080}"
+    env_file:
+      - .env
+    environment:
+      # Paksa driver mongo (abaikan kalau sudah diset di .env)
+      DB_DRIVER: mongo
+      GIN_MODE: release
+    volumes:
+      # Log harian aplikasi
+      - ./logs:/app/logs
+      # File kunci enkripsi (data/.encryption_key).
+      # LEBIH AMAN: set MASTER_ENCRYPTION_KEY di .env, maka volume ini opsional.
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

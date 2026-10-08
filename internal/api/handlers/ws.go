@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +24,42 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
+	CheckOrigin: checkWSOrigin,
+}
+
+// allowedWSOrigins is an optional whitelist of origins (scheme://host) allowed
+// to open WebSocket connections, configured via ALLOWED_ORIGINS.
+// When empty, only same-origin browser requests (Origin host == request host)
+// and non-browser clients (no Origin header, e.g. the Go agent) are allowed.
+var allowedWSOrigins []string
+
+// SetAllowedWSOrigins configures the WebSocket origin whitelist.
+// Call once at startup from main.
+func SetAllowedWSOrigins(origins []string) {
+	allowedWSOrigins = origins
+}
+
+func checkWSOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// Non-browser clients (Go agent) don't send Origin.
 		return true
-	},
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	// Same-origin (dashboard served by this server).
+	if u.Host == r.Host {
+		return true
+	}
+	for _, o := range allowedWSOrigins {
+		if strings.EqualFold(strings.TrimSpace(o), origin) {
+			return true
+		}
+	}
+	log.Printf("WARNING: rejected WebSocket upgrade from disallowed Origin %q (host %s)", origin, r.Host)
+	return false
 }
 
 // nodeState tracks disconnect, grace period, and flapping state for one institution.

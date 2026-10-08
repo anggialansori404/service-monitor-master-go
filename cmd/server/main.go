@@ -17,6 +17,7 @@ import (
 	"monitoring-master/internal/bot"
 	"monitoring-master/internal/cleanup"
 	"monitoring-master/internal/config"
+	"monitoring-master/internal/crypto"
 	"monitoring-master/internal/database"
 	"monitoring-master/internal/digest"
 	"monitoring-master/internal/logutil"
@@ -169,6 +170,40 @@ func main() {
 		// Call SQL Seeder if necessary (Not migrating old mongo seeding logic for brevity, assuming standard setup)
 	}
 
+	// --- At-rest encryption for credential fields (agent secrets, Telegram tokens) ---
+	encKey, err := crypto.LoadKey()
+	if err != nil {
+		log.Fatalf("failed to load encryption key: %v", err)
+	}
+	cryptor, err := crypto.NewCipher(encKey)
+	if err != nil {
+		log.Fatalf("failed to init cipher: %v", err)
+	}
+	// Clear key material from memory as soon as possible.
+	for i := range encKey {
+		encKey[i] = 0
+	}
+	switch r := repo.(type) {
+	case *repository.MongoRepository:
+		r.SetCryptor(cryptor)
+	case *repository.SQLRepository:
+		r.SetCryptor(cryptor)
+	}
+	// Best-effort migration of legacy plaintext secrets (idempotent).
+	type secretMigrator interface {
+		MigrateSecrets(context.Context) (int, error)
+	}
+	if m, ok := repo.(secretMigrator); ok {
+		mctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		n, merr := m.MigrateSecrets(mctx)
+		cancel()
+		if merr != nil {
+			log.Printf("WARNING: secret migration failed: %v (server continues; plaintext rows still readable)", merr)
+		} else if n > 0 {
+			log.Printf("Secret migration: encrypted %d legacy plaintext credential row(s)", n)
+		}
+	}
+
 	// --- WebSocket Registry ---
 	registry := ws.NewRegistry()
 
@@ -258,6 +293,7 @@ func main() {
 	// --- Handlers ---
 	agentHandler := handlers.NewAgentHandler(repo, alertManager)
 	frontendHandler := handlers.NewFrontendHandler(repo, registry, cfg.JWTSecret, cfg.CaptchaSecret)
+	handlers.SetAllowedWSOrigins(cfg.AllowedOrigins)
 	wsHandler := handlers.NewWSHandler(registry, repo, alertManager)
 	frontendHandler.WSHandler = wsHandler
 	settingHandler := handlers.NewSettingHandler(repo)

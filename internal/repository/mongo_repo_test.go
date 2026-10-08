@@ -29,7 +29,7 @@ func TestMongoInstitutionDocToModel(t *testing.T) {
 		MaintenanceUntil:     &future,
 	}
 
-	model := doc.toModel()
+	model := doc.toModel(nil)
 
 	if model.ID != oid.Hex() {
 		t.Errorf("expected ID %s, got %s", oid.Hex(), model.ID)
@@ -62,7 +62,7 @@ func TestMongoInstitutionDocToModel(t *testing.T) {
 		ID:                "test-false",
 		NotifyNodeOffline: &falseVal,
 	}
-	if docWithFalse.toModel().NotifyNodeOffline {
+	if docWithFalse.toModel(nil).NotifyNodeOffline {
 		t.Errorf("expected NotifyNodeOffline to be false, got true")
 	}
 
@@ -72,7 +72,7 @@ func TestMongoInstitutionDocToModel(t *testing.T) {
 		Name:          "String ID Inst",
 		InMaintenance: false,
 	}
-	modelStr := docStringID.toModel()
+	modelStr := docStringID.toModel(nil)
 	if modelStr.ID != "custom-string-id" {
 		t.Errorf("expected ID 'custom-string-id', got '%s'", modelStr.ID)
 	}
