@@ -27,7 +27,8 @@ services:
       # LEBIH AMAN: set MASTER_ENCRYPTION_KEY di .env, maka volume ini opsional.
       - ./data:/app/data
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      # Pakai $PORT dari environment (escape $$ untuk compose).
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${PORT:-8080}/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
