@@ -1,4 +1,4 @@
-# Persiapan Mini PC (Data Center) — Migrasi api.hikariclouds.my.id
+# Persiapan Mini PC (Data Center) — Migrasi api-monitoring.mangdev.net
 
 Migrasi service-monitor master dari VPS lama (43.157.226.129) ke mini PC di DC.
 Metode: Docker, image dari GHCR (dibangun otomatis oleh GitHub Actions).
@@ -25,7 +25,7 @@ docker compose version          # pastikan plugin compose ada
 ## 3. Jaringan & DNS
 
 - Firewall/NAT di DC: buka **80, 443** (dan 22 untuk SSH)
-- **JANGAN pindah DNS dulu.** Turunkan TTL record `api.hikariclouds.my.id`
+- **JANGAN pindah DNS dulu.** Turunkan TTL record `api-monitoring.mangdev.net`
   ke 300 detik minimal H-1 sebelum cutover, biar perpindahan cepat.
 
 ## 4. Siapkan folder deploy
@@ -76,23 +76,23 @@ curl http://127.0.0.1:4001/health    # harus 200 (atau port sesuai .env)
 Pakai conf dari repo: `nginx/svcmon.mangdev.net.conf` sebagai acuan,
 tapi sesuaikan:
 
-- `server_name api.hikariclouds.my.id;`
+- `server_name api-monitoring.mangdev.net;`
 - `proxy_pass http://127.0.0.1:4001;` (atau port sesuai `.env`)
 - **Pertahankan dari conf lama**: security headers, websocket upgrade
   di `/api/v1/ws/agent`, `proxy_read_timeout 3600s`
 
 ```bash
-sudo cp api.hikariclouds.my.id.conf /etc/nginx/conf.d/
+sudo cp api-monitoring.mangdev.net.conf /etc/nginx/conf.d/
 sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d api.hikariclouds.my.id
+sudo certbot --nginx -d api-monitoring.mangdev.net
 ```
 
 ## 8. Cutover (saat VPS lama mau off)
 
 1. Pastikan container di mini PC sehat (`/health` 200 via nginx)
-2. Pindah DNS `api.hikariclouds.my.id` → IP publik mini PC
+2. Pindah DNS `api-monitoring.mangdev.net` → IP publik mini PC
 3. Tunggu propagasi (dengan TTL 300, ~5-10 menit)
-4. Test: `curl https://api.hikariclouds.my.id/health`
+4. Test: `curl https://api-monitoring.mangdev.net/health`
 5. Test login + cek agent-agent masih sync
 6. Matikan service di VPS lama
 
