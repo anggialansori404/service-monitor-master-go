@@ -225,7 +225,11 @@ func main() {
 	blacklistMgr := middleware.NewBlacklistManagerWithTrusted(repo, cfg.TrustedProxyIPs)
 
 	// --- Gin Router ---
-	r := gin.Default()
+	// gin.New() + custom quiet logger (skips 404 scanner noise) + recovery.
+	// Equivalent to gin.Default() but without the noisy default logger.
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(middleware.QuietLogger())
 
 	// --- Security Middleware ---
 	r.Use(middleware.IPBlacklist(blacklistMgr))
