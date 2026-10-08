@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -14,6 +15,26 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
+
+// QuietLogger is like gin.Logger() but skips 404 responses to reduce log
+// spam from bot scanners probing random paths (/.env, /wp-admin, etc).
+// Security-relevant events are still recorded separately via security_logs
+// in the database, so nothing important is lost.
+func QuietLogger() gin.HandlerFunc {
+	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		if param.StatusCode == http.StatusNotFound {
+			return ""
+		}
+		return fmt.Sprintf("[GIN] %v | %3d | %13v | %15s | %-7s %#v\n",
+			param.TimeStamp.Format("2006/01/02 - 15:04:05"),
+			param.StatusCode,
+			param.Latency,
+			param.ClientIP,
+			param.Method,
+			param.Path,
+		)
+	})
+}
 
 // SecurityHeaders adds standard security headers to every response.
 func SecurityHeaders() gin.HandlerFunc {
@@ -173,10 +194,9 @@ func (bm *BlacklistManager) IsBlacklisted(ip string) bool {
 }
 
 // Blacklist immediately marks the IP in memory and persists it to DB asynchronously.
-// Trusted proxy IPs are never blacklisted.
+// Trusted proxy IPs are never blacklisted (silently skipped to avoid log spam).
 func (bm *BlacklistManager) Blacklist(ip, reason string) {
 	if bm.IsTrusted(ip) {
-		log.Printf("[SECURITY] Skipping blacklist for trusted proxy IP %s (%s)", ip, reason)
 		return
 	}
 	bm.mu.Lock()
@@ -279,9 +299,14 @@ func SuspiciousPathLogger(bm *BlacklistManager, repo repository.Repository) gin.
 		}
 
 		if isSuspicious {
-			log.Printf("[SECURITY] Suspicious access attempt from %s: %s %s. Blacklisting.", ip, c.Request.Method, c.Request.URL.Path)
+			// Trusted proxies: log to DB only, don't spam stdout (bot scanners
+			// hitting the proxy would flood the logs).
+			if !bm.IsTrusted(ip) {
+				log.Printf("[SECURITY] Suspicious access attempt from %s: %s %s. Blacklisting.", ip, c.Request.Method, c.Request.URL.Path)
+			}
 
 			// Blacklist IP immediately in-memory and asynchronously persist to DB
+			// (no-op for trusted proxy IPs)
 			bm.Blacklist(ip, reason)
 
 			securityLog := &models.SecurityLog{
