@@ -9,15 +9,16 @@ services:
     image: ghcr.io/anggialansori404/service-monitor-master:latest
     container_name: svcmon-master
     restart: unless-stopped
-    # Hanya bind ke localhost — yang expose ke publik adalah nginx
+    # Hanya bind ke localhost — yang expose ke publik adalah nginx.
+    # Port mengikuti $PORT (default 8080). Untuk migrasi dari VPS lama,
+    # set PORT=4001 di .env agar sama seperti sebelumnya.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${PORT:-8080}:${PORT:-8080}"
     env_file:
       - .env
     environment:
       # Paksa driver mongo (abaikan kalau sudah diset di .env)
       DB_DRIVER: mongo
-      PORT: "8080"
       GIN_MODE: release
     volumes:
       # Log harian aplikasi
