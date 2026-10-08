@@ -103,19 +103,43 @@ type BlacklistManager struct {
 	mu     sync.RWMutex
 	ips    map[string]struct{}
 	stopCh chan struct{}
+	// trusted holds IPs (reverse proxy, gateway) that must never be blacklisted.
+	trusted map[string]struct{}
 }
 
 // NewBlacklistManager initializes the BlacklistManager, loads all blacklisted IPs into memory,
 // and starts a background periodic synchronization routine.
 func NewBlacklistManager(repo repository.Repository) *BlacklistManager {
+	return NewBlacklistManagerWithTrusted(repo, nil)
+}
+
+// NewBlacklistManagerWithTrusted is like NewBlacklistManager but also takes a list
+// of trusted proxy IPs that are exempt from blacklisting.
+func NewBlacklistManagerWithTrusted(repo repository.Repository, trustedIPs []string) *BlacklistManager {
+	trusted := make(map[string]struct{}, len(trustedIPs))
+	for _, ip := range trustedIPs {
+		if ip = strings.TrimSpace(ip); ip != "" {
+			trusted[ip] = struct{}{}
+		}
+	}
+	if len(trusted) > 0 {
+		log.Printf("[SECURITY] %d trusted proxy IP(s) exempt from blacklisting", len(trusted))
+	}
 	bm := &BlacklistManager{
-		repo:   repo,
-		ips:    make(map[string]struct{}),
-		stopCh: make(chan struct{}),
+		repo:    repo,
+		ips:     make(map[string]struct{}),
+		stopCh:  make(chan struct{}),
+		trusted: trusted,
 	}
 	bm.LoadFromDB()
 	go bm.startPeriodicSync(5 * time.Minute)
 	return bm
+}
+
+// IsTrusted reports whether the IP is a trusted proxy exempt from blacklisting.
+func (bm *BlacklistManager) IsTrusted(ip string) bool {
+	_, ok := bm.trusted[ip]
+	return ok
 }
 
 // LoadFromDB fetches all blacklisted IPs from database and refreshes memory cache.
@@ -149,7 +173,12 @@ func (bm *BlacklistManager) IsBlacklisted(ip string) bool {
 }
 
 // Blacklist immediately marks the IP in memory and persists it to DB asynchronously.
+// Trusted proxy IPs are never blacklisted.
 func (bm *BlacklistManager) Blacklist(ip, reason string) {
+	if bm.IsTrusted(ip) {
+		log.Printf("[SECURITY] Skipping blacklist for trusted proxy IP %s (%s)", ip, reason)
+		return
+	}
 	bm.mu.Lock()
 	bm.ips[ip] = struct{}{}
 	bm.mu.Unlock()
@@ -189,12 +218,19 @@ func (bm *BlacklistManager) Stop() {
 }
 
 // IPBlacklist checks if the client IP is in the blacklist using in-memory lookup.
+// Trusted proxy IPs bypass the check even if present in the DB (safety net).
 func IPBlacklist(bm *BlacklistManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
 
 		// Do not block localhost
 		if ip == "127.0.0.1" || ip == "::1" {
+			c.Next()
+			return
+		}
+
+		// Never block trusted proxies
+		if bm.IsTrusted(ip) {
 			c.Next()
 			return
 		}

@@ -221,7 +221,8 @@ func main() {
 	}
 
 	// --- Blacklist Manager (In-Memory Cache) ---
-	blacklistMgr := middleware.NewBlacklistManager(repo)
+	// Trusted proxy IPs (from TRUSTED_PROXY_IPS) are never blacklisted.
+	blacklistMgr := middleware.NewBlacklistManagerWithTrusted(repo, cfg.TrustedProxyIPs)
 
 	// --- Gin Router ---
 	r := gin.Default()

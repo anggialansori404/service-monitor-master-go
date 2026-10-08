@@ -39,6 +39,14 @@ type Config struct {
 	// only same-origin (Origin host == request host) or non-browser clients
 	// (no Origin header, like the Go agent) are allowed.
 	AllowedOrigins []string
+
+	// TrustedProxyIPs is a comma-separated list of IPs (reverse proxy,
+	// gateway, load balancer) that must NEVER be blacklisted. Behind a
+	// reverse proxy all client traffic may appear to come from the proxy IP;
+	// blacklisting it would block everyone. Suspicious activity from these
+	// IPs is still logged, just not blacklisted.
+	// e.g. "191.179.1.254,10.0.0.1"
+	TrustedProxyIPs []string
 }
 
 // LoadConfig loads configuration from a .env file (if present) and
@@ -73,6 +81,8 @@ func LoadConfig() *Config {
 		ScheduleRunRetentionDays: getEnvAsInt("SCHEDULE_RUN_RETENTION_DAYS", 30),
 
 		AllowedOrigins: parseCSV("ALLOWED_ORIGINS"),
+
+		TrustedProxyIPs: parseCSV("TRUSTED_PROXY_IPS"),
 	}
 
 	if cfg.JWTSecret == "" {
