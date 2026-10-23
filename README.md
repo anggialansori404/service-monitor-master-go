@@ -9,6 +9,8 @@ A robust Go-based monitoring service designed to track the health of multiple in
 - **Telegram Integration**: Get instant alerts for service status changes.
 - **WebSocket Support**: Live status updates for the frontend dashboard.
 - **Dual Database Support**: Works with MongoDB Atlas or SQL (PostgreSQL/MySQL).
+- **Display Names**: Stable `name` key + human `display_name` for UI/Telegram.
+- **Stale Detection**: Flags services unchecked >90s instead of showing stale UP.
 - **Service Management Script**: Easy `service.sh` for background execution and daily logging.
 
 ## � Service Agent
@@ -53,6 +55,24 @@ cp .env.example .env
 
 ## 🛠️ Installation & Running
 
+### Docker (VPS, recommended)
+
+Build happens **locally on the VPS** — no GHCR pull, no registry login:
+
+```bash
+cp .env.example .env && nano .env
+docker compose up -d --build
+docker compose logs -f
+curl http://127.0.0.1:8080/health   # 200 = OK
+```
+
+Update:
+```bash
+git pull && docker compose up -d --build
+```
+
+### Binary (manual)
+
 1. **Clone the repository**:
    ```bash
    git clone <repository-url>
@@ -74,6 +94,11 @@ cp .env.example .env
    chmod +x service.sh
    ./service.sh start
    ```
+
+### CI (manual only)
+
+GitHub Actions is `workflow_dispatch` only — push does not consume minutes.
+Trigger via Actions tab when a binary is needed. Artifacts retained 7 days.
 
 ## 📂 Project Structure
 
