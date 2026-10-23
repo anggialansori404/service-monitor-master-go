@@ -246,9 +246,9 @@ func (r *SQLRepository) GetServicesByInstitution(instID string, search string, s
 	query := r.db.Model(&models.Service{}).Where("institution_id = ?", instID)
 
 	if search != "" {
-		query = query.Where("name LIKE ?", "%"+search+"%")
+		like := "%" + search + "%"
+		query = query.Where("name LIKE ? OR display_name LIKE ?", like, like)
 	}
-
 	// Inject Status Filter - Created by Kang Anggi
 	if status != "" && strings.ToUpper(status) != "ALL" {
 		query = query.Where("status = ?", strings.ToUpper(status))

@@ -362,9 +362,11 @@ func (r *MongoRepository) GetServicesByInstitution(instID string, search string,
 	filter := bson.M{"institution_id": bson.M{"$in": []interface{}{instID, objID}}}
 
 	if search != "" {
-		filter["name"] = bson.M{"$regex": search, "$options": "i"}
+		filter["$or"] = []bson.M{
+			{"name": bson.M{"$regex": search, "$options": "i"}},
+			{"display_name": bson.M{"$regex": search, "$options": "i"}},
+		}
 	}
-
 	// Inject Status Filter - Created by Kang Anggi
 	if status != "" && strings.ToUpper(status) != "ALL" {
 		filter["status"] = strings.ToUpper(status)
