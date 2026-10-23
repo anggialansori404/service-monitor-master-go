@@ -48,6 +48,7 @@ type Repository interface {
 	UpdateServiceStatusWithDisplayName(ctx context.Context, instID string, name, displayName, status string, t time.Time) error
 	UpdateServiceRestartStatus(ctx context.Context, instID, name, restartStatus string) error
 	UpdateServiceAutoRestart(ctx context.Context, instID, name string, autoRestart bool) error
+	UpdateServiceDisplayName(ctx context.Context, instID, name, displayName string) error
 	CountServicesByStatus(instID string, status string) (int64, error)
 	CountServicesByStatusBulk(instIDs []string) (map[string]map[string]int64, error)
 	CreateService(service *models.Service) error

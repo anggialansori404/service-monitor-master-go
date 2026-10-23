@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"monitoring-master/internal/alert"
@@ -416,30 +417,54 @@ func (h *FrontendHandler) RestartService(c *gin.Context) {
 	c.JSON(http.StatusOK, agentResp)
 }
 
-// UpdateServiceAutoRestart handles PATCH /institutions/:id/services/:name.
-// Updates the auto_restart field for a service.
-func (h *FrontendHandler) UpdateServiceAutoRestart(c *gin.Context) {
+// UpdateServiceConfig handles PATCH /institutions/:id/services/:name.
+// Updates auto_restart and/or display_name. At least one field required.
+func (h *FrontendHandler) UpdateServiceConfig(c *gin.Context) {
 	instID := c.Param("id")
 	serviceName := c.Param("name")
-	
+
 	var req struct {
-		AutoRestart bool `json:"auto_restart" binding:"required"`
+		AutoRestart *bool   `json:"auto_restart"`
+		DisplayName *string `json:"display_name"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	
-	if err := h.Repo.UpdateServiceAutoRestart(c.Request.Context(), instID, serviceName, req.AutoRestart); err != nil {
-		if err == repository.ErrNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "service not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update service"})
+	if req.AutoRestart == nil && req.DisplayName == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "auto_restart or display_name required"})
 		return
 	}
-	
-	c.JSON(http.StatusOK, gin.H{"message": "auto_restart updated", "auto_restart": req.AutoRestart})
+
+	if req.AutoRestart != nil {
+		if err := h.Repo.UpdateServiceAutoRestart(c.Request.Context(), instID, serviceName, *req.AutoRestart); err != nil {
+			if err == repository.ErrNotFound {
+				c.JSON(http.StatusNotFound, gin.H{"error": "service not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update service"})
+			return
+		}
+	}
+	if req.DisplayName != nil {
+		name := strings.TrimSpace(*req.DisplayName)
+		if err := h.Repo.UpdateServiceDisplayName(c.Request.Context(), instID, serviceName, name); err != nil {
+			if err == repository.ErrNotFound {
+				c.JSON(http.StatusNotFound, gin.H{"error": "service not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update display name"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "service updated"})
+}
+
+// UpdateServiceAutoRestart handles PATCH /institutions/:id/services/:name (legacy).
+// Delegates to UpdateServiceConfig for backward compatibility.
+func (h *FrontendHandler) UpdateServiceAutoRestart(c *gin.Context) {
+	h.UpdateServiceConfig(c)
 }
 
 // generateRandomString returns a cryptographically random string of length n.

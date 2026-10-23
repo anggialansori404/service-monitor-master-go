@@ -77,9 +77,8 @@ func (m *mockInstRepo) UpdateServiceStatusWithDisplayName(_ context.Context, _ s
 func (m *mockInstRepo) UpdateServiceRestartStatus(_ context.Context, _, _, _ string) error {
 	return nil
 }
-func (m *mockInstRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error {
-	return nil
-}
+func (m *mockInstRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error { return nil }
+func (m *mockInstRepo) UpdateServiceDisplayName(_ context.Context, _, _, _ string) error { return nil }
 func (m *mockInstRepo) CountServicesByStatus(_ string, _ string) (int64, error) { return 0, nil }
 func (m *mockInstRepo) CountServicesByStatusBulk(_ []string) (map[string]map[string]int64, error) {
 	return nil, nil

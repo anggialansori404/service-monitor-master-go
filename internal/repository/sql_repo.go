@@ -385,6 +385,18 @@ func (r *SQLRepository) UpdateServiceAutoRestart(ctx context.Context, instID, na
 	return nil
 }
 
+func (r *SQLRepository) UpdateServiceDisplayName(ctx context.Context, instID, name, displayName string) error {
+	result := r.db.WithContext(ctx).Model(&models.Service{}).
+		Where("institution_id = ? AND name = ?", instID, name).
+		Update("display_name", displayName)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
 func (r *SQLRepository) UpdateServiceRestartStatus(ctx context.Context, instID, name, restartStatus string) error {
 	return r.db.WithContext(ctx).Model(&models.Service{}).
 		Where("institution_id = ? AND name = ?", instID, name).

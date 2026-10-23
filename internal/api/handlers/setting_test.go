@@ -65,9 +65,8 @@ func (m *mockSettingRepo) UpdateServiceStatusWithDisplayName(_ context.Context, 
 func (m *mockSettingRepo) UpdateServiceRestartStatus(_ context.Context, _, _, _ string) error {
 	return nil
 }
-func (m *mockSettingRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error {
-	return nil
-}
+func (m *mockSettingRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error { return nil }
+func (m *mockSettingRepo) UpdateServiceDisplayName(_ context.Context, _, _, _ string) error { return nil }
 func (m *mockSettingRepo) CountServicesByStatus(_ string, _ string) (int64, error)       { return 0, nil }
 func (m *mockSettingRepo) CountServicesByStatusBulk(_ []string) (map[string]map[string]int64, error) {
 	return nil, nil

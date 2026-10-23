@@ -162,9 +162,8 @@ func (m *mockRepo) UpdateServiceStatusWithDisplayName(_ context.Context, _ strin
 	return nil
 }
 func (m *mockRepo) UpdateServiceRestartStatus(_ context.Context, _, _, _ string) error { return nil }
-func (m *mockRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error {
-	return nil
-}
+func (m *mockRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error { return nil }
+func (m *mockRepo) UpdateServiceDisplayName(_ context.Context, _, _, _ string) error { return nil }
 func (m *mockRepo) CountServicesByStatus(_ string, _ string) (int64, error)       { return 0, nil }
 func (m *mockRepo) CountServicesByStatusBulk(_ []string) (map[string]map[string]int64, error) {
 	return nil, nil

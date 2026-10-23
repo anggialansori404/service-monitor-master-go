@@ -93,9 +93,8 @@ func (m *mockWSRepo) UpdateServiceStatusWithDisplayName(_ context.Context, _ str
 func (m *mockWSRepo) UpdateServiceRestartStatus(_ context.Context, _, _, _ string) error {
 	return nil
 }
-func (m *mockWSRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error {
-	return nil
-}
+func (m *mockWSRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error { return nil }
+func (m *mockWSRepo) UpdateServiceDisplayName(_ context.Context, _, _, _ string) error { return nil }
 func (m *mockWSRepo) CountServicesByStatus(_ string, _ string) (int64, error) { return 0, nil }
 func (m *mockWSRepo) CountServicesByStatusBulk(_ []string) (map[string]map[string]int64, error) {
 	return nil, nil

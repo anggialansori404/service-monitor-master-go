@@ -594,6 +594,20 @@ func (r *MongoRepository) UpdateServiceAutoRestart(ctx context.Context, instID, 
 	return nil
 }
 
+func (r *MongoRepository) UpdateServiceDisplayName(ctx context.Context, instID, name, displayName string) error {
+	coll := r.db.Collection("services")
+	filter := bson.M{"institution_id": instID, "name": name}
+	update := bson.M{"$set": bson.M{"display_name": displayName}}
+	result, err := coll.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *MongoRepository) UpdateServiceRestartStatus(ctx context.Context, instID, name, restartStatus string) error {
 	coll := r.db.Collection("services")
 	filter := bson.M{"institution_id": instID, "name": name}

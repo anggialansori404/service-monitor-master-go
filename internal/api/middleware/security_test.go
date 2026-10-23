@@ -87,9 +87,8 @@ func (f *fullMockRepo) UpdateServiceStatusWithDisplayName(_ context.Context, _ s
 	return nil
 }
 func (f *fullMockRepo) UpdateServiceRestartStatus(_ context.Context, _, _, _ string) error { return nil }
-func (f *fullMockRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error {
-	return nil
-}
+func (f *fullMockRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error { return nil }
+func (f *fullMockRepo) UpdateServiceDisplayName(_ context.Context, _, _, _ string) error { return nil }
 func (f *fullMockRepo) CountServicesByStatus(_ string, _ string) (int64, error)       { return 0, nil }
 func (f *fullMockRepo) CountServicesByStatusBulk(_ []string) (map[string]map[string]int64, error) {
 	return nil, nil
