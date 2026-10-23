@@ -392,6 +392,7 @@ func (r *MongoRepository) GetServicesByInstitution(instID string, search string,
 		InstitutionID interface{} `bson:"institution_id"`
 
 		Name          string      `bson:"name"`
+		DisplayName   string      `bson:"display_name,omitempty"`
 		Type          string      `bson:"type"`
 		Status        string      `bson:"status"`
 		AutoRestart   bool        `bson:"auto_restart"`
@@ -422,6 +423,7 @@ func (r *MongoRepository) GetServicesByInstitution(instID string, search string,
 			ID:            docID,
 			InstitutionID: instIDStr,
 			Name:          doc.Name,
+			DisplayName:   doc.DisplayName,
 			Type:          doc.Type,
 			Status:        doc.Status,
 			AutoRestart:   doc.AutoRestart,
@@ -429,7 +431,6 @@ func (r *MongoRepository) GetServicesByInstitution(instID string, search string,
 			LastChecked:   doc.LastChecked,
 		})
 	}
-
 
 	if services == nil {
 		services = []models.Service{}
@@ -444,6 +445,7 @@ func (r *MongoRepository) GetService(instID string, name string) (*models.Servic
 		ID            interface{} `bson:"_id"`
 		InstitutionID string      `bson:"institution_id"`
 		Name          string      `bson:"name"`
+		DisplayName   string      `bson:"display_name,omitempty"`
 		Type          string      `bson:"type"`
 		Status        string      `bson:"status"`
 		AutoRestart   bool        `bson:"auto_restart"`
@@ -467,6 +469,7 @@ func (r *MongoRepository) GetService(instID string, name string) (*models.Servic
 		ID:            docID,
 		InstitutionID: doc.InstitutionID,
 		Name:          doc.Name,
+		DisplayName:   doc.DisplayName,
 		Type:          doc.Type,
 		Status:        doc.Status,
 		AutoRestart:   doc.AutoRestart,
