@@ -490,6 +490,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 				HardwareInfo *models.HardwareInfo `json:"hardware_info"`
 				Services     []struct {
 					Name        string `json:"name"`
+					DisplayName string `json:"display_name"`
 					Type        string `json:"type"`
 					Status      string `json:"status"`
 					AutoRestart bool   `json:"auto_restart"`
@@ -530,9 +531,14 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 					statusToSave = "UP"
 				}
 
+				displayName := svc.DisplayName
+				if displayName == "" {
+					displayName = svc.Name
+				}
 				service := models.Service{
 					InstitutionID: instID,
 					Name:          svc.Name,
+					DisplayName:   displayName,
 					Type:          svc.Type,
 					Status:        statusToSave,
 					AutoRestart:   svc.AutoRestart,
@@ -590,6 +596,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 
 		if action == "alert" {
 			svcName, _ := msgData["service"].(string)
+			displayName, _ := msgData["display_name"].(string)
 			status, _ := msgData["status"].(string)
 			msgStr, _ := msgData["message"].(string)
 			if strings.TrimSpace(msgStr) == "" {
@@ -606,7 +613,7 @@ func (h *WSHandler) AgentWS(c *gin.Context) {
 			now := time.Now().Local()
 			statusUpper := strings.ToUpper(strings.TrimSpace(status))
 			if statusUpper != "" {
-				if err := h.Repo.UpdateServiceStatus(context.Background(), instID, svcName, statusUpper, now); err != nil {
+				if err := h.Repo.UpdateServiceStatusWithDisplayName(context.Background(), instID, svcName, displayName, statusUpper, now); err != nil {
 					if errors.Is(err, repository.ErrNotFound) || err.Error() == "record not found" {
 						log.Printf("[NODE-WS] Institution %s (%s) was deleted from DB. Closing WS connection for agent %s.", institution.Name, instID, agentID)
 						_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "institution deleted"))

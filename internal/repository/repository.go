@@ -45,6 +45,7 @@ type Repository interface {
 	UpsertService(ctx context.Context, service *models.Service) error
 	BulkUpsertServices(ctx context.Context, services []models.Service) error
 	UpdateServiceStatus(ctx context.Context, instID string, name, status string, t time.Time) error
+	UpdateServiceStatusWithDisplayName(ctx context.Context, instID string, name, displayName, status string, t time.Time) error
 	UpdateServiceRestartStatus(ctx context.Context, instID, name, restartStatus string) error
 	UpdateServiceAutoRestart(ctx context.Context, instID, name string, autoRestart bool) error
 	CountServicesByStatus(instID string, status string) (int64, error)

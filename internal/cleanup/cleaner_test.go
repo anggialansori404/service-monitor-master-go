@@ -60,6 +60,9 @@ func (m *mockCleanupRepo) BulkUpsertServices(_ context.Context, _ []models.Servi
 func (m *mockCleanupRepo) UpdateServiceStatus(_ context.Context, _ string, _, _ string, _ time.Time) error {
 	return nil
 }
+func (m *mockCleanupRepo) UpdateServiceStatusWithDisplayName(_ context.Context, _ string, _, _, _ string, _ time.Time) error {
+	return nil
+}
 func (m *mockCleanupRepo) UpdateServiceRestartStatus(_ context.Context, _, _, _ string) error {
 	return nil
 }

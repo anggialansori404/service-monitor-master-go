@@ -502,6 +502,7 @@ func (r *MongoRepository) UpsertService(ctx context.Context, service *models.Ser
 	}
 
 	update := bson.M{"$set": bson.M{
+		"display_name": service.DisplayName,
 		"type":         service.Type,
 		"status":       statusStr,
 		"auto_restart": service.AutoRestart,
@@ -534,6 +535,7 @@ func (r *MongoRepository) BulkUpsertServices(ctx context.Context, services []mod
 
 		update := bson.M{
 			"$set": bson.M{
+				"display_name": svc.DisplayName,
 				"type":         svc.Type,
 				"status":       statusStr,
 				"auto_restart": svc.AutoRestart,
@@ -554,12 +556,20 @@ func (r *MongoRepository) BulkUpsertServices(ctx context.Context, services []mod
 }
 
 func (r *MongoRepository) UpdateServiceStatus(ctx context.Context, instID string, name, status string, t time.Time) error {
+	return r.UpdateServiceStatusWithDisplayName(ctx, instID, name, "", status, t)
+}
+
+func (r *MongoRepository) UpdateServiceStatusWithDisplayName(ctx context.Context, instID string, name, displayName, status string, t time.Time) error {
 	coll := r.db.Collection("services")
 	filter := bson.M{"institution_id": instID, "name": name}
-	update := bson.M{"$set": bson.M{
+	setDoc := bson.M{
 		"status":       status,
 		"last_checked": t,
-	}}
+	}
+	if displayName != "" {
+		setDoc["display_name"] = displayName
+	}
+	update := bson.M{"$set": setDoc}
 	result, err := coll.UpdateOne(ctx, filter, update)
 	if err != nil {
 		return err

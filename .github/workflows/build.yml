@@ -1,13 +1,22 @@
-name: Build binaries
+name: Build binaries (manual)
+
+# Master di-deploy via Docker LANGSUNG di VPS (docker compose up -d --build).
+# Workflow ini MANUAL saja (workflow_dispatch) — tidak makan minutes tiap push,
+# tidak push image ke GHCR. Biner di bawah hanya cadangan (dibagikan via Telegram).
 
 on:
-  push:
-    branches: [security-fixes]
-  workflow_dispatch:
+  workflow_dispatch
+
+concurrency:
+  group: master-build
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -29,6 +38,7 @@ jobs:
           name: monitoring-server-linux-amd64
           path: ${{ github.workspace }}/monitoring-server-linux-amd64.bin
           if-no-files-found: error
+          retention-days: 7
       - name: Notify Telegram
         if: always()
         run: |
@@ -46,30 +56,3 @@ jobs:
             -F message_thread_id="${{ secrets.TELEGRAM_TOPIC_ID }}" \
             -F document=@"monitoring-server-linux-amd64.bin" \
             -F caption="📦 monitoring-server-linux-amd64.bin (UPX) — ${{ github.ref_name }} @ ${{ github.sha }}"
-
-  # Build & push Docker image ke GHCR (repo private → image private by default).
-  # Server tinggal: docker login ghcr.io + docker compose pull.
-  # .env TIDAK dibake ke image (diinject saat runtime via env_file).
-  docker:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Login ke GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & push image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/anggialansori404/service-monitor-master:latest
-            ghcr.io/anggialansori404/service-monitor-master:${{ github.sha }}

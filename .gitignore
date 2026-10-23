@@ -49,3 +49,4 @@ tmp_test_oid.go
 # Service logs and PID
 logs/
 service.pid
+tmp_master_bin

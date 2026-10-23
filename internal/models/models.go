@@ -42,13 +42,24 @@ type Service struct {
 	ID            string     `json:"id" bson:"_id,omitempty" gorm:"primaryKey"`
 	InstitutionID string     `json:"institution_id" bson:"institution_id"`
 	Name          string     `json:"name" bson:"name"`
+	DisplayName   string     `json:"display_name" bson:"display_name,omitempty" gorm:"default:''"`
 	Type          string     `json:"type" bson:"type"`
 	Status        string     `json:"status" bson:"status"`
 	AutoRestart   bool       `json:"auto_restart" bson:"auto_restart"`
 	RestartStatus string     `json:"restart_status" bson:"restart_status,omitempty" gorm:"default:''"`
 	LastChecked   *time.Time `json:"last_checked" bson:"last_checked,omitempty"`
+	IsStale       bool       `json:"is_stale" bson:"-" gorm:"-"`
+	Stale         bool       `json:"stale" bson:"-" gorm:"-"`
 
 	Institution *Institution `json:"-" bson:"-" gorm:"foreignKey:InstitutionID"`
+}
+
+// GetDisplayName returns DisplayName if non-empty, otherwise falls back to Name.
+func (s Service) GetDisplayName() string {
+	if s.DisplayName != "" {
+		return s.DisplayName
+	}
+	return s.Name
 }
 
 // DashboardSummaryResponse represents the aggregated dashboard data.

@@ -25,9 +25,9 @@ type AlertEvent struct {
 	Timestamp     time.Time
 }
 
-// batchState tracks an active Telegram batch alert for one institution.
+// BatchState tracks an active Telegram batch alert for one institution.
 // Used to edit the batch message when services recover.
-type batchState struct {
+type BatchState struct {
 	SentMessages []TargetMessageID
 	DownService  map[string]AlertEvent // key: serviceName
 }
@@ -38,7 +38,7 @@ type Manager struct {
 	EventChan    chan AlertEvent
 	debounceMap  map[string]*time.Timer
 	pendingDowns map[string]AlertEvent // key: instID_serviceName
-	batchStates  map[string]*batchState // instID -> active batch message
+	batchStates  map[string]*BatchState // instID -> active batch message
 	mu           sync.Mutex
 	debounceTime time.Duration
 }
@@ -53,9 +53,53 @@ func NewManager(repo repository.Repository, debounceTime time.Duration) *Manager
 		EventChan:    make(chan AlertEvent, 1000),
 		debounceMap:  make(map[string]*time.Timer),
 		pendingDowns: make(map[string]AlertEvent),
-		batchStates:  make(map[string]*batchState),
+		batchStates:  make(map[string]*BatchState),
 		debounceTime: debounceTime,
 	}
+}
+
+// displayMap fetches all services for one institution once and maps
+// service name -> display label (DisplayName fallback Name).
+// Avoids N+1 GetService calls when rendering batch lists.
+func (m *Manager) displayMap(ctx context.Context, instID string) map[string]string {
+	names := map[string]string{}
+	list, _, err := m.repo.GetServicesByInstitution(instID, "", "", 1, 5000)
+	if err != nil {
+		return names
+	}
+	for _, s := range list {
+		if s.DisplayName != "" {
+			names[s.Name] = s.DisplayName
+		} else {
+			names[s.Name] = s.Name
+		}
+	}
+	return names
+}
+
+// label resolves display label from pre-fetched map, fallback to raw name.
+func label(dm map[string]string, name string) string {
+	if v, ok := dm[name]; ok && v != "" {
+		return v
+	}
+	return name
+}
+// GetBatchState returns a copy of active batch state for an institution.
+func (m *Manager) GetBatchState(instID string) *BatchState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bs, ok := m.batchStates[instID]
+	if !ok || bs == nil {
+		return nil
+	}
+	res := &BatchState{
+		SentMessages: append([]TargetMessageID(nil), bs.SentMessages...),
+		DownService:  make(map[string]AlertEvent),
+	}
+	for k, v := range bs.DownService {
+		res.DownService[k] = v
+	}
+	return res
 }
 
 // Start begins processing the alert channel
@@ -154,8 +198,14 @@ func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
 		delete(m.pendingDowns, key)
 	}
 
-	// Case 2: Timer already fired — check active batch
+	// Case 2: Check active batch
 	bs, hasBatch := m.batchStates[instID]
+	inBatch := false
+	if hasBatch && bs != nil {
+		if _, ok := bs.DownService[event.ServiceName]; ok {
+			inBatch = true
+		}
+	}
 
 	// Clean up pendingDowns if still there (edge case)
 	delete(m.pendingDowns, key)
@@ -172,6 +222,12 @@ func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
 			event.ServiceName, event.InstitutionID, resolvedInc.DurationSec, resolvedByAuto)
 	}
 
+	if inBatch {
+		// Edit the existing batch Telegram message even if timerActive was true
+		m.editBatchOnRecovery(ctx, instID, bs, event)
+		return
+	}
+
 	if timerActive {
 		log.Printf("Flap detected and mitigated for %s: it recovered within %v (Telegram notification suppressed)", key, m.debounceTime)
 		return
@@ -185,10 +241,9 @@ func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
 		m.sendDirectAlert(ctx, event)
 	}
 }
-
 // editBatchOnRecovery removes a recovered service from the active batch message
 // and edits the Telegram message across all sent targets.
-func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *batchState, recoveryEvent AlertEvent) {
+func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *BatchState, recoveryEvent AlertEvent) {
 	m.mu.Lock()
 
 	// Remove this service from the batch
@@ -217,11 +272,12 @@ func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *ba
 		newText = fmt.Sprintf("✅ *ALL SERVICES RECOVERED*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n_Semua service telah kembali normal._",
 			inst.Name, time.Now().Local().Format("02 Jan 2006 15:04:05"))
 	} else {
-		// Still some down — rebuild the list
+		// Still some down — rebuild the list (display names pre-fetched once).
+		dm := m.displayMap(ctx, instID)
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("🟡 *CRITICAL ALERT BATCH (UPDATED)*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n",
 			inst.Name, time.Now().Local().Format("02 Jan 2006 15:04:05")))
-		sb.WriteString(fmt.Sprintf("_✅ Baru pulih: %s_\n\n", recoveryEvent.ServiceName))
+		sb.WriteString(fmt.Sprintf("_✅ Baru pulih: %s_\n\n", label(dm, recoveryEvent.ServiceName)))
 		sb.WriteString(fmt.Sprintf("_Daftar Service Masih DOWN (%d):_\n", remaining))
 
 		// Sort service names for consistent output
@@ -233,7 +289,7 @@ func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *ba
 
 		i := 1
 		for _, name := range names {
-			sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i, name))
+			sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i, label(dm, name)))
 			i++
 		}
 		newText = sb.String()
@@ -325,19 +381,34 @@ func (m *Manager) sendBatchedAlert(ctx context.Context, instID string, events []
 		downMap[ev.ServiceName] = ev
 	}
 
+	// Merge with existing batch DownService if present
+	m.mu.Lock()
+	existingBs := m.batchStates[instID]
+	combinedDownMap := make(map[string]AlertEvent)
+	if existingBs != nil {
+		for k, v := range existingBs.DownService {
+			combinedDownMap[k] = v
+		}
+	}
+	for k, v := range downMap {
+		combinedDownMap[k] = v
+	}
+	m.mu.Unlock()
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("🔴 *CRITICAL ALERT BATCH*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n", inst.Name, time.Now().Local().Format("02 Jan 2006 15:04:05")))
 	sb.WriteString("_Daftar Service Terkena Dampak (DOWN):_\n")
 
 	// Sort for consistent output
-	names := make([]string, 0, len(events))
-	for _, ev := range events {
-		names = append(names, ev.ServiceName)
+	names := make([]string, 0, len(combinedDownMap))
+	for name := range combinedDownMap {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 
+	dmBatch := m.displayMap(ctx, instID)
 	for i, name := range names {
-		sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i+1, name))
+		sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i+1, label(dmBatch, name)))
 	}
 
 	setting, _ := m.repo.GetSettings(ctx)
@@ -361,14 +432,33 @@ func (m *Manager) sendBatchedAlert(ctx context.Context, instID string, events []
 	}
 
 	if len(sentMsgs) > 0 {
-		// Track the batch message for future edits
+		// Track the batch message for future edits: merge DownService and SentMessages
 		m.mu.Lock()
-		m.batchStates[instID] = &batchState{
-			SentMessages: sentMsgs,
-			DownService:  downMap,
+		curBs := m.batchStates[instID]
+		if curBs == nil {
+			m.batchStates[instID] = &BatchState{
+				SentMessages: sentMsgs,
+				DownService:  combinedDownMap,
+			}
+		} else {
+			for k, v := range combinedDownMap {
+				curBs.DownService[k] = v
+			}
+			for _, newMsg := range sentMsgs {
+				exists := false
+				for _, oldMsg := range curBs.SentMessages {
+					if oldMsg.MessageID == newMsg.MessageID && oldMsg.Target.ChatID == newMsg.Target.ChatID {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					curBs.SentMessages = append(curBs.SentMessages, newMsg)
+				}
+			}
 		}
 		m.mu.Unlock()
-		log.Printf("AlertEngine: batch tracked for institution %s (%d services, %d destinations)", inst.Name, len(downMap), len(sentMsgs))
+		log.Printf("AlertEngine: batch tracked for institution %s (%d services, %d destinations)", inst.Name, len(combinedDownMap), len(sentMsgs))
 	}
 }
 
@@ -378,8 +468,9 @@ func (m *Manager) sendDirectAlert(ctx context.Context, event AlertEvent) {
 		return
 	}
 
+	dm := m.displayMap(ctx, event.InstitutionID)
 	msg := fmt.Sprintf("✅ *SERVICE RECOVERY*\n\n🏢 *Lembaga:* %s\n⚙️ *Service:* %s\n⏰ *Waktu:* %s",
-		inst.Name, event.ServiceName, time.Now().Local().Format("02 Jan 2006 15:04:05"))
+		inst.Name, label(dm, event.ServiceName), time.Now().Local().Format("02 Jan 2006 15:04:05"))
 
 	setting, _ := m.repo.GetSettings(ctx)
 	targets := ResolveTelegramTargets(inst, setting)

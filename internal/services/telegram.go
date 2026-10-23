@@ -8,9 +8,20 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 )
 
-// telegramResponse is the response from Telegram sendMessage / editMessageText API.
+var telegramAPIBaseURL = "https://api.telegram.org"
+
+// SetTelegramBaseURLForTest overrides the Telegram API base URL for testing.
+func SetTelegramBaseURLForTest(url string) {
+	telegramAPIBaseURL = url
+}
+
+// ResetTelegramBaseURLForTest resets the Telegram API base URL to production default.
+func ResetTelegramBaseURLForTest() {
+	telegramAPIBaseURL = "https://api.telegram.org"
+}
 type telegramResponse struct {
 	OK          bool   `json:"ok"`
 	ErrorCode   int    `json:"error_code"`
@@ -27,7 +38,7 @@ func SendTelegramAlert(token, chatID, topicID, message string) (int, error) {
 		return 0, fmt.Errorf("token or chatID is empty")
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
+	url := fmt.Sprintf("%s/bot%s/sendMessage", telegramAPIBaseURL, token)
 	payload := map[string]interface{}{
 		"chat_id":    chatID,
 		"text":       message,
@@ -80,6 +91,21 @@ func SendTelegramAlert(token, chatID, topicID, message string) (int, error) {
 // Use after an agent reconnects to update a "disconnected" alert to "recovered".
 // messageID is the ID returned by SendTelegramAlert.
 func EditTelegramMessage(token, chatID, topicID string, messageID int, newText string) error {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		err := editTelegramMessageOnce(token, chatID, topicID, messageID, newText)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt*50) * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("edit message after 3 attempts: %w", lastErr)
+}
+
+func editTelegramMessageOnce(token, chatID, topicID string, messageID int, newText string) error {
 	if token == "" || chatID == "" {
 		return fmt.Errorf("token or chatID is empty")
 	}
@@ -87,7 +113,7 @@ func EditTelegramMessage(token, chatID, topicID string, messageID int, newText s
 		return fmt.Errorf("messageID is zero")
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/editMessageText", token)
+	url := fmt.Sprintf("%s/bot%s/editMessageText", telegramAPIBaseURL, token)
 	payload := map[string]interface{}{
 		"chat_id":    chatID,
 		"message_id": messageID,

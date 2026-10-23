@@ -71,6 +71,9 @@ func (m *mockInstRepo) BulkUpsertServices(_ context.Context, _ []models.Service)
 func (m *mockInstRepo) UpdateServiceStatus(_ context.Context, _ string, _, _ string, _ time.Time) error {
 	return nil
 }
+func (m *mockInstRepo) UpdateServiceStatusWithDisplayName(_ context.Context, _ string, _, _, _ string, _ time.Time) error {
+	return nil
+}
 func (m *mockInstRepo) UpdateServiceRestartStatus(_ context.Context, _, _, _ string) error {
 	return nil
 }

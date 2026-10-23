@@ -44,6 +44,11 @@ func BuildGlobalDigestMessage(totalNodes, onlineNodes, totalServices, runningSer
 
 // BuildInstitutionDigestMessage formats a markdown summary for a single institution.
 func BuildInstitutionDigestMessage(instName string, isOnline bool, totalServices, runningServices, downServices int, incidents24h int64, t time.Time) string {
+	return BuildInstitutionDigestMessageWithServices(instName, isOnline, totalServices, runningServices, downServices, nil, incidents24h, t)
+}
+
+// BuildInstitutionDigestMessageWithServices formats a markdown summary for a single institution, including down service display names.
+func BuildInstitutionDigestMessageWithServices(instName string, isOnline bool, totalServices, runningServices, downServices int, downServiceList []models.Service, incidents24h int64, t time.Time) string {
 	nodeStr := "🟢 Online (Tersambung)"
 	if !isOnline {
 		nodeStr = "🔴 Offline (Terputus)"
@@ -59,13 +64,12 @@ func BuildInstitutionDigestMessage(instName string, isOnline bool, totalServices
 		incidentIcon = "🚨"
 	}
 
-	return fmt.Sprintf("📊 *LAPORAN HARIAN LEMBAGA*\n\n"+
+	msg := fmt.Sprintf("📊 *LAPORAN HARIAN LEMBAGA*\n\n"+
 		"🏢 *Lembaga:* %s\n"+
 		"⏰ *Waktu:* %s\n\n"+
 		"🖥️ *Node Server:* %s\n"+
 		"⚙️ *Kondisi Service:* %s (%d/%d Aktif)\n"+
-		"%s *Insiden 24 Jam:* %d insiden\n\n"+
-		"_Sistem monitoring beroperasi normal._",
+		"%s *Insiden 24 Jam:* %d insiden\n\n",
 		instName,
 		t.Format("02 Jan 2006 15:04 WIB"),
 		nodeStr,
@@ -73,6 +77,18 @@ func BuildInstitutionDigestMessage(instName string, isOnline bool, totalServices
 		incidentIcon,
 		incidents24h,
 	)
+
+	if len(downServiceList) > 0 {
+		msg += "_Service Masih Bermasalah:_\n"
+		for i, svc := range downServiceList {
+			name := svc.GetDisplayName()
+			msg += fmt.Sprintf("%d. ⚠️ %s\n", i+1, name)
+		}
+		msg += "\n"
+	}
+
+	msg += "_Sistem monitoring beroperasi normal._"
+	return msg
 }
 
 // SendDailyDigest compiles system health statistics and sends to Global and Custom Telegram destinations.
@@ -108,6 +124,7 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 		totalSvc     int
 		runningSvc   int
 		downSvc      int
+		downList     []models.Service
 		incidents24h int64
 	}
 	var instStats []instStat
@@ -124,12 +141,14 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 		instRunningSvc := 0
 		instDownSvc := 0
 
+		var instDownList []models.Service
 		for _, s := range servicesList {
 			switch s.Status {
 			case "UP":
 				instRunningSvc++
 			case "DOWN":
 				instDownSvc++
+				instDownList = append(instDownList, s)
 			}
 		}
 
@@ -149,6 +168,7 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 			totalSvc:     instTotalSvc,
 			runningSvc:   instRunningSvc,
 			downSvc:      instDownSvc,
+			downList:     instDownList,
 			incidents24h: instIncidents,
 		})
 	}
@@ -175,7 +195,7 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 				continue
 			}
 
-			instMsg := BuildInstitutionDigestMessage(inst.Name, stat.isOnline, stat.totalSvc, stat.runningSvc, stat.downSvc, stat.incidents24h, now)
+			instMsg := BuildInstitutionDigestMessageWithServices(inst.Name, stat.isOnline, stat.totalSvc, stat.runningSvc, stat.downSvc, stat.downList, stat.incidents24h, now)
 			_, err := services.SendTelegramAlert(inst.TelegramBotToken, inst.TelegramChatID, inst.TelegramTopicID, instMsg)
 			if err != nil {
 				log.Printf("[DAILY DIGEST ERROR] Failed to send custom digest to %s: %v", inst.Name, err)

@@ -33,6 +33,7 @@ type syncRequest struct {
 
 type syncService struct {
 	Name        string `json:"name" binding:"required"`
+	DisplayName string `json:"display_name"`
 	Type        string `json:"type" binding:"required"`
 	Status      string `json:"status" binding:"required,oneof=UP DOWN"`
 	AutoRestart bool   `json:"auto_restart"`
@@ -76,9 +77,14 @@ func (h *AgentHandler) Sync(c *gin.Context) {
 			statusToSave = "UP"
 		}
 
+		displayName := svc.DisplayName
+		if displayName == "" {
+			displayName = svc.Name
+		}
 		service := models.Service{
 			InstitutionID: instID,
 			Name:          svc.Name,
+			DisplayName:   displayName,
 			Type:          svc.Type,
 			Status:        statusToSave,
 			AutoRestart:   svc.AutoRestart,
@@ -145,8 +151,9 @@ func (h *AgentHandler) Sync(c *gin.Context) {
 
 // alertRequest is the expected payload for POST /agent/alert.
 type alertRequest struct {
-	Service string `json:"service" binding:"required"`
-	Status  string `json:"status" binding:"required,oneof=UP DOWN"`
+	Service     string `json:"service" binding:"required"`
+	DisplayName string `json:"display_name"`
+	Status      string `json:"status" binding:"required,oneof=UP DOWN"`
 }
 
 // Alert handles POST /agent/alert.
@@ -170,7 +177,7 @@ func (h *AgentHandler) Alert(c *gin.Context) {
 	}
 
 	// Update the service status.
-	if err := h.Repo.UpdateServiceStatus(c.Request.Context(), instID, req.Service, req.Status, now); err != nil {
+	if err := h.Repo.UpdateServiceStatusWithDisplayName(c.Request.Context(), instID, req.Service, req.DisplayName, req.Status, now); err != nil {
 		if err == repository.ErrNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"error": "service not found"})
 			return

@@ -83,6 +83,9 @@ func (f *fullMockRepo) BulkUpsertServices(_ context.Context, _ []models.Service)
 func (f *fullMockRepo) UpdateServiceStatus(_ context.Context, _ string, _, _ string, _ time.Time) error {
 	return nil
 }
+func (f *fullMockRepo) UpdateServiceStatusWithDisplayName(_ context.Context, _ string, _, _, _ string, _ time.Time) error {
+	return nil
+}
 func (f *fullMockRepo) UpdateServiceRestartStatus(_ context.Context, _, _, _ string) error { return nil }
 func (f *fullMockRepo) UpdateServiceAutoRestart(_ context.Context, _, _ string, _ bool) error {
 	return nil

@@ -301,6 +301,7 @@ func (r *SQLRepository) UpsertService(ctx context.Context, service *models.Servi
 	}
 
 	return r.db.WithContext(ctx).Model(&existing).Updates(map[string]interface{}{
+		"display_name": service.DisplayName,
 		"type":         service.Type,
 		"status":       statusStr,
 		"auto_restart": service.AutoRestart,
@@ -335,6 +336,7 @@ func (r *SQLRepository) BulkUpsertServices(ctx context.Context, services []model
 			}
 
 			err = tx.Model(&existing).Updates(map[string]interface{}{
+				"display_name": svc.DisplayName,
 				"type":         svc.Type,
 				"status":       statusStr,
 				"auto_restart": svc.AutoRestart,
@@ -349,10 +351,18 @@ func (r *SQLRepository) BulkUpsertServices(ctx context.Context, services []model
 }
 
 func (r *SQLRepository) UpdateServiceStatus(ctx context.Context, instID string, name, status string, t time.Time) error {
-	result := r.db.WithContext(ctx).Model(&models.Service{}).Where("institution_id = ? AND name = ?", instID, name).Updates(map[string]interface{}{
+	return r.UpdateServiceStatusWithDisplayName(ctx, instID, name, "", status, t)
+}
+
+func (r *SQLRepository) UpdateServiceStatusWithDisplayName(ctx context.Context, instID string, name, displayName, status string, t time.Time) error {
+	updates := map[string]interface{}{
 		"status":       status,
 		"last_checked": t,
-	})
+	}
+	if displayName != "" {
+		updates["display_name"] = displayName
+	}
+	result := r.db.WithContext(ctx).Model(&models.Service{}).Where("institution_id = ? AND name = ?", instID, name).Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}

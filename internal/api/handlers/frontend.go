@@ -276,9 +276,19 @@ func (h *FrontendHandler) ListServices(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch services"})
 		return
 	}
-
 	if services == nil {
 		services = []models.Service{}
+	}
+
+	// Stale = no successful check within 90s (~6x the 15s agent interval).
+	// Old 3-minute window let dead agents show fresh UP for too long.
+	staleThreshold := 90 * time.Second
+	now := time.Now()
+	for i := range services {
+		if services[i].LastChecked == nil || now.Sub(*services[i].LastChecked) > staleThreshold {
+			services[i].IsStale = true
+			services[i].Stale = true
+		}
 	}
 
 	totalPages := int(total) / limit
@@ -376,8 +386,18 @@ func (h *FrontendHandler) RestartService(c *gin.Context) {
 	success, ok := agentResp["success"].(bool)
 	if ok && success {
 		statusVal = "SUCCESS"
+		// Mark restart outcome. Do NOT claim UP/DOWN here:
+		// real status arrives with the next agent sync. last_known_status
+		// is the pre-restart DB value, not a fresh check.
+		if err := h.Repo.UpdateServiceRestartStatus(c.Request.Context(), instID, serviceName, "SUCCESS"); err != nil {
+			log.Printf("RestartService: failed to update restart status for %s/%s: %v", instID, serviceName, err)
+		}
+		if refreshedSvc, err := h.Repo.GetService(instID, serviceName); err == nil && refreshedSvc != nil {
+			agentResp["display_name"] = refreshedSvc.GetDisplayName()
+			agentResp["last_known_status"] = refreshedSvc.Status
+			agentResp["note"] = "restart accepted; fresh status arrives with next agent sync"
+		}
 	}
-
 	detailsStr, _ := agentResp["message"].(string)
 
 	auditLog := models.AuditLog{
