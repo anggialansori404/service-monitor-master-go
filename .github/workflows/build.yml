@@ -51,6 +51,10 @@ jobs:
       - name: Upload binary to Telegram
         if: success()
         run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
+            -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -F message_thread_id="${{ secrets.TELEGRAM_TOPIC_ID }}" \
+            -F document=@"monitoring-server-linux-amd64.bin" \
             -F caption="📦 monitoring-server-linux-amd64.bin (UPX) — ${{ github.ref_name }} @ ${{ github.sha }}"
 
   # Build & push Docker image ke GHCR (public → gratis, tanpa login di VPS).
