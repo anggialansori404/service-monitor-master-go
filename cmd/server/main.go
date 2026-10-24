@@ -156,6 +156,7 @@ func main() {
 			&models.Schedule{},
 			&models.ScheduleRun{},
 			&models.IncidentLog{},
+			&models.AlertBatchState{},
 		)
 		if err != nil {
 			log.Fatalf("failed to auto-migrate database: %v", err)
@@ -272,26 +273,26 @@ func main() {
 		var lastSentDate string
 		for range ticker.C {
 			now := time.Now().Local()
-			todayDate := now.Format("2006-01-02")
-			currentTimeStr := now.Format("15:04")
 
 			settings, err := repo.GetSettings(context.Background())
 			if err != nil || settings == nil || !settings.EnableDailyDigest {
 				continue
 			}
 
-			digestTime := settings.DailyDigestTime
-			if digestTime == "" {
-				digestTime = "08:00"
+			// Due-check is window-based, not exact-minute: a restart or a missed
+			// tick after the configured time still delivers today's report.
+			if !digest.ShouldSendDigest(now, settings.DailyDigestTime, lastSentDate) {
+				continue
 			}
 
-			if currentTimeStr == digestTime && lastSentDate != todayDate {
-				lastSentDate = todayDate
-				log.Printf("[DAILY DIGEST] Triggering scheduled daily digest at %s...", currentTimeStr)
-				if err := digest.SendDailyDigest(context.Background(), repo); err != nil {
-					log.Printf("[DAILY DIGEST ERROR] Failed to send scheduled digest: %v", err)
-				}
+			log.Printf("[DAILY DIGEST] Triggering scheduled daily digest at %s (target %s)...", now.Format("15:04"), settings.DailyDigestTime)
+			if err := digest.SendDailyDigest(context.Background(), repo); err != nil {
+				// Leave today unmarked: the next tick inside the catch-up window
+				// retries instead of losing the whole day.
+				log.Printf("[DAILY DIGEST ERROR] Failed to send scheduled digest: %v", err)
+				continue
 			}
+			lastSentDate = now.Format("2006-01-02")
 		}
 	}()
 

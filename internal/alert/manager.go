@@ -35,6 +35,7 @@ type BatchState struct {
 // Manager handles alert deduplication and batched sending
 type Manager struct {
 	repo         repository.Repository
+	batchStore   repository.BatchStateStore // nil disables persistence (in-memory only)
 	EventChan    chan AlertEvent
 	debounceMap  map[string]*time.Timer
 	pendingDowns map[string]AlertEvent // key: instID_serviceName
@@ -48,8 +49,13 @@ func NewManager(repo repository.Repository, debounceTime time.Duration) *Manager
 	if debounceTime == 0 {
 		debounceTime = 2 * time.Minute
 	}
+	store, ok := repo.(repository.BatchStateStore)
+	if !ok {
+		log.Println("AlertEngine: repository has no batch state store, batch alerts will not survive a restart")
+	}
 	return &Manager{
 		repo:         repo,
+		batchStore:   store,
 		EventChan:    make(chan AlertEvent, 1000),
 		debounceMap:  make(map[string]*time.Timer),
 		pendingDowns: make(map[string]AlertEvent),
@@ -100,6 +106,106 @@ func (m *Manager) GetBatchState(instID string) *BatchState {
 		res.DownService[k] = v
 	}
 	return res
+}
+
+// hydrateBatch loads the persisted batch state of an institution into memory
+// when this process has none yet (e.g. right after a master restart).
+// Telegram targets are re-resolved from current settings so a rotated bot token
+// still edits the old message; targets that no longer exist are dropped.
+func (m *Manager) hydrateBatch(ctx context.Context, instID string) {
+	m.mu.Lock()
+	_, cached := m.batchStates[instID]
+	m.mu.Unlock()
+	if cached {
+		return
+	}
+
+	if m.batchStore == nil {
+		return
+	}
+	stored, err := m.batchStore.GetAlertBatchState(ctx, instID)
+	if err != nil {
+		log.Printf("AlertEngine: failed to load persisted batch state for %s: %v", instID, err)
+		return
+	}
+	if stored == nil || len(stored.Messages) == 0 {
+		return
+	}
+
+	inst, err := m.repo.GetInstitutionByID(instID)
+	if err != nil || inst == nil {
+		return
+	}
+	setting, _ := m.repo.GetSettings(ctx)
+	byKey := make(map[string]TelegramTarget)
+	for _, t := range ResolveTelegramTargets(inst, setting) {
+		byKey[targetKey(t.ChatID, t.TopicID, t.IsGlobal)] = t
+	}
+
+	var msgs []TargetMessageID
+	for _, msg := range stored.Messages {
+		target, ok := byKey[targetKey(msg.ChatID, msg.TopicID, msg.IsGlobal)]
+		if !ok {
+			continue
+		}
+		msgs = append(msgs, TargetMessageID{Target: target, MessageID: msg.MessageID})
+	}
+	if len(msgs) == 0 {
+		_ = m.batchStore.DeleteAlertBatchState(ctx, instID)
+		return
+	}
+
+	down := make(map[string]AlertEvent, len(stored.DownServices))
+	for _, name := range stored.DownServices {
+		down[name] = AlertEvent{InstitutionID: instID, ServiceName: name, Status: "DOWN", Timestamp: stored.UpdatedAt}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.batchStates[instID]; exists {
+		return
+	}
+	m.batchStates[instID] = &BatchState{SentMessages: msgs, DownService: down}
+	log.Printf("AlertEngine: restored batch state for %s (%d services, %d messages) from DB", inst.Name, len(down), len(msgs))
+}
+
+// targetKey identifies a Telegram destination without its (rotatable) token.
+func targetKey(chatID, topicID string, isGlobal bool) string {
+	return fmt.Sprintf("%s|%s|%t", chatID, topicID, isGlobal)
+}
+
+// persistBatch writes the current in-memory batch state of an institution to the DB.
+func (m *Manager) persistBatch(ctx context.Context, instID string) {
+	m.mu.Lock()
+	bs := m.batchStates[instID]
+	if bs == nil {
+		m.mu.Unlock()
+		if m.batchStore != nil {
+			_ = m.batchStore.DeleteAlertBatchState(ctx, instID)
+		}
+		return
+	}
+	state := &models.AlertBatchState{InstitutionID: instID}
+	for _, sent := range bs.SentMessages {
+		state.Messages = append(state.Messages, models.AlertBatchMessage{
+			ChatID:    sent.Target.ChatID,
+			TopicID:   sent.Target.TopicID,
+			IsGlobal:  sent.Target.IsGlobal,
+			MessageID: sent.MessageID,
+		})
+	}
+	for name := range bs.DownService {
+		state.DownServices = append(state.DownServices, name)
+	}
+	m.mu.Unlock()
+
+	sort.Strings(state.DownServices)
+	if m.batchStore == nil {
+		return
+	}
+	if err := m.batchStore.SaveAlertBatchState(ctx, state); err != nil {
+		log.Printf("AlertEngine: failed to persist batch state for %s: %v", instID, err)
+	}
 }
 
 // Start begins processing the alert channel
@@ -166,8 +272,26 @@ func (m *Manager) handleDown(ctx context.Context, key string, event AlertEvent) 
 	}
 
 	// 2. Telegram Alert Deduplication / Debounce
+	// Restore any batch that was active before a master restart.
+	m.hydrateBatch(ctx, event.InstitutionID)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Service already listed in the active batch message: refresh the tracked
+	// event and stay silent. The agent re-reports DOWN on every failed
+	// auto-restart cycle, which must not fan out into new Telegram messages.
+	if bs, ok := m.batchStates[event.InstitutionID]; ok && bs != nil {
+		if _, tracked := bs.DownService[event.ServiceName]; tracked {
+			bs.DownService[event.ServiceName] = event
+			if t, pending := m.debounceMap[key]; pending {
+				t.Stop()
+				delete(m.debounceMap, key)
+				delete(m.pendingDowns, key)
+			}
+			return
+		}
+	}
 
 	// If a timer already exists, do NOT reset it. Just update the pending message.
 	if _, ok := m.debounceMap[key]; ok {
@@ -186,6 +310,8 @@ func (m *Manager) handleDown(ctx context.Context, key string, event AlertEvent) 
 
 func (m *Manager) handleUp(ctx context.Context, key string, event AlertEvent) {
 	instID := event.InstitutionID
+
+	m.hydrateBatch(ctx, instID)
 
 	m.mu.Lock()
 
@@ -258,6 +384,7 @@ func (m *Manager) editBatchOnRecovery(ctx context.Context, instID string, bs *Ba
 		delete(m.batchStates, instID)
 	}
 	m.mu.Unlock()
+	m.persistBatch(ctx, instID)
 
 	// Build the new message text
 	inst, err := m.repo.GetInstitutionByID(instID)
@@ -368,47 +495,29 @@ func (m *Manager) processTimeout(ctx context.Context, key string) {
 	}
 }
 
+// buildBatchText renders the critical batch alert body for one institution.
+// Used for both the initial send and every in-place edit.
+func buildBatchText(instName string, down map[string]AlertEvent, dm map[string]string, t time.Time) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("🔴 *CRITICAL ALERT BATCH*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n", instName, t.Format("02 Jan 2006 15:04:05")))
+	sb.WriteString(fmt.Sprintf("_Daftar Service Terkena Dampak (DOWN) (%d):_\n", len(down)))
+
+	names := make([]string, 0, len(down))
+	for name := range down {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for i, name := range names {
+		sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i+1, label(dm, name)))
+	}
+	return sb.String()
+}
+
 func (m *Manager) sendBatchedAlert(ctx context.Context, instID string, events []AlertEvent) {
 	inst, err := m.repo.GetInstitutionByID(instID)
 	if err != nil {
 		log.Printf("AlertEngine error: failed to fetch institution %s: %v", instID, err)
 		return
-	}
-
-	// Build downService map for tracking
-	downMap := make(map[string]AlertEvent)
-	for _, ev := range events {
-		downMap[ev.ServiceName] = ev
-	}
-
-	// Merge with existing batch DownService if present
-	m.mu.Lock()
-	existingBs := m.batchStates[instID]
-	combinedDownMap := make(map[string]AlertEvent)
-	if existingBs != nil {
-		for k, v := range existingBs.DownService {
-			combinedDownMap[k] = v
-		}
-	}
-	for k, v := range downMap {
-		combinedDownMap[k] = v
-	}
-	m.mu.Unlock()
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("🔴 *CRITICAL ALERT BATCH*\n\n🏢 *Lembaga:* %s\n⏰ *Waktu:* %s\n\n", inst.Name, time.Now().Local().Format("02 Jan 2006 15:04:05")))
-	sb.WriteString("_Daftar Service Terkena Dampak (DOWN):_\n")
-
-	// Sort for consistent output
-	names := make([]string, 0, len(combinedDownMap))
-	for name := range combinedDownMap {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	dmBatch := m.displayMap(ctx, instID)
-	for i, name := range names {
-		sb.WriteString(fmt.Sprintf("%d. ⚙️ *%s* - _Agent sedang auto-restart_\n", i+1, label(dmBatch, name)))
 	}
 
 	setting, _ := m.repo.GetSettings(ctx)
@@ -417,49 +526,78 @@ func (m *Manager) sendBatchedAlert(ctx context.Context, instID string, events []
 		return
 	}
 
+	// Merge this wave into the batch already tracked for the institution.
+	m.mu.Lock()
+	existingBs := m.batchStates[instID]
+	combinedDownMap := make(map[string]AlertEvent)
+	var tracked []TargetMessageID
+	if existingBs != nil {
+		for k, v := range existingBs.DownService {
+			combinedDownMap[k] = v
+		}
+		tracked = append(tracked, existingBs.SentMessages...)
+	}
+	for _, ev := range events {
+		combinedDownMap[ev.ServiceName] = ev
+	}
+	m.mu.Unlock()
+
+	text := buildBatchText(inst.Name, combinedDownMap, m.displayMap(ctx, instID), time.Now().Local())
+
+	// A batch message already exists: edit it in place so Telegram shows one
+	// evolving alert instead of one new message per down wave.
+	var kept []TargetMessageID
+	if len(tracked) > 0 {
+		var staleTargets []TelegramTarget
+		for _, sent := range tracked {
+			if err := services.EditTelegramMessage(sent.Target.Token, sent.Target.ChatID, sent.Target.TopicID, sent.MessageID, text); err != nil {
+				// Usually the message was deleted in Telegram; resend to this target only.
+				log.Printf("AlertEngine failed to edit batch message %d for %s: %v", sent.MessageID, inst.Name, err)
+				staleTargets = append(staleTargets, sent.Target)
+				continue
+			}
+			kept = append(kept, sent)
+		}
+		if len(staleTargets) == 0 {
+			m.storeBatch(ctx, instID, kept, combinedDownMap)
+			log.Printf("AlertEngine: batch for %s edited in place (%d services, %d messages)", inst.Name, len(combinedDownMap), len(kept))
+			return
+		}
+		log.Printf("AlertEngine: batch for %s edited on %d target(s), resending to %d stale target(s)", inst.Name, len(kept), len(staleTargets))
+		targets = staleTargets
+	}
+
 	log.Printf("AlertEngine sending BATCH telegram message to %s (%d destinations)", inst.Name, len(targets))
-	var sentMsgs []TargetMessageID
 	for _, target := range targets {
-		msgID, sendErr := services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, sb.String())
+		msgID, sendErr := services.SendTelegramAlert(target.Token, target.ChatID, target.TopicID, text)
 		if sendErr != nil {
 			log.Printf("AlertEngine failed to send batch to target %+v: %v", target, sendErr)
 		} else if msgID != 0 {
-			sentMsgs = append(sentMsgs, TargetMessageID{
-				Target:    target,
-				MessageID: msgID,
-			})
+			kept = append(kept, TargetMessageID{Target: target, MessageID: msgID})
 		}
 	}
 
-	if len(sentMsgs) > 0 {
-		// Track the batch message for future edits: merge DownService and SentMessages
-		m.mu.Lock()
-		curBs := m.batchStates[instID]
-		if curBs == nil {
-			m.batchStates[instID] = &BatchState{
-				SentMessages: sentMsgs,
-				DownService:  combinedDownMap,
-			}
-		} else {
-			for k, v := range combinedDownMap {
-				curBs.DownService[k] = v
-			}
-			for _, newMsg := range sentMsgs {
-				exists := false
-				for _, oldMsg := range curBs.SentMessages {
-					if oldMsg.MessageID == newMsg.MessageID && oldMsg.Target.ChatID == newMsg.Target.ChatID {
-						exists = true
-						break
-					}
-				}
-				if !exists {
-					curBs.SentMessages = append(curBs.SentMessages, newMsg)
-				}
-			}
-		}
-		m.mu.Unlock()
-		log.Printf("AlertEngine: batch tracked for institution %s (%d services, %d destinations)", inst.Name, len(combinedDownMap), len(sentMsgs))
+	if len(kept) == 0 {
+		return
 	}
+	m.storeBatch(ctx, instID, kept, combinedDownMap)
+	log.Printf("AlertEngine: batch tracked for institution %s (%d services, %d destinations)", inst.Name, len(combinedDownMap), len(kept))
+}
+
+// storeBatch records the tracked batch messages and down services for one institution.
+func (m *Manager) storeBatch(ctx context.Context, instID string, msgs []TargetMessageID, down map[string]AlertEvent) {
+	m.mu.Lock()
+	if bs := m.batchStates[instID]; bs != nil {
+		bs.SentMessages = msgs
+		for k, v := range down {
+			bs.DownService[k] = v
+		}
+	} else {
+		m.batchStates[instID] = &BatchState{SentMessages: msgs, DownService: down}
+	}
+	m.mu.Unlock()
+
+	m.persistBatch(ctx, instID)
 }
 
 func (m *Manager) sendDirectAlert(ctx context.Context, event AlertEvent) {

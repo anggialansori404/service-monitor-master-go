@@ -5,7 +5,34 @@
 
 ---
 
-## [v1.2.5] - 2026-09-24 - Agent Credential Trimming & Auth Diagnostics
+## [v1.2.6] - 2026-10-24 - Daily Digest Reliability & Batch Alert Edit-in-Place
+
+---
+
+### service-monitor-master-go
+
+#### fix(digest): Laporan harian tidak lagi terlewat karena penjadwalan exact-minute
+- **Files**: cmd/server/main.go, internal/digest/digest.go, internal/api/handlers/setting.go
+- **Problem**: Worker membandingkan `now.Format("15:04") == daily_digest_time`. Jika master restart, tick terlewat, atau jam tersimpan tidak persis `HH:MM` (mis. `8:00`), laporan hari itu dilewati tanpa log sama sekali.
+- **Fix**: Menambahkan `digest.ShouldSendDigest` + `digest.ParseDigestTime` dengan catch-up window 15 menit: laporan dikirim bila jam target sudah lewat (≤15 menit) dan belum terkirim hari ini. Pengiriman yang gagal tidak menandai hari sebagai terkirim sehingga dicoba lagi pada tick berikutnya. Format jam divalidasi `HH:MM` saat simpan settings.
+
+#### fix(digest): `SendDailyDigest` tidak lagi "sukses" diam-diam tanpa tujuan
+- **Files**: internal/digest/digest.go, internal/api/handlers/setting.go
+- **Problem**: Bila bot/chat global kosong dan tidak ada lembaga dengan bot custom, fungsi mengembalikan `nil` sehingga endpoint test melaporkan berhasil padahal tidak ada pesan terkirim.
+- **Fix**: Menghitung pengiriman sukses dan mengembalikan error deskriptif bila nol; endpoint `POST /settings/test-daily-digest` juga menolak (400) saat daily digest dinonaktifkan.
+
+#### fix(alert): Critical batch alert spam — edit pesan lama, bukan kirim ulang
+- **Files**: internal/alert/manager.go
+- **Problem**: Setiap gelombang DOWN baru (dan setiap DOWN berulang dari agent saat auto-restart gagal) memicu `sendMessage` baru, sehingga grup Telegram dibanjiri pesan `CRITICAL ALERT BATCH` yang isinya hampir sama.
+- **Fix**: Service yang sudah tercantum di batch aktif tidak dikirim ulang (state di-refresh saja). Service baru yang ikut DOWN mengedit pesan batch yang sudah ada via `editMessageText`; kirim pesan baru hanya bila belum ada pesan batch atau seluruh edit gagal. Teks batch memakai builder bersama `buildBatchText` dengan jumlah service yang sedang DOWN.
+
+#### feat(alert): State batch alert dipersistensikan agar bertahan saat master restart
+- **Files**: internal/models/models.go, internal/repository/repository.go, internal/repository/sql_repo.go, internal/repository/mongo_repo.go, internal/alert/manager.go, cmd/server/main.go
+- **Problem**: `BatchState` hanya di memori. Setelah master restart, DOWN berikutnya mengirim pesan `CRITICAL ALERT BATCH` baru, dan pesan lama tetap menggantung dalam kondisi "masih DOWN" tanpa pernah diedit.
+- **Fix**: Menambahkan model `AlertBatchState` (tabel `alert_batch_states`; koleksi `alert_batch_states` di Mongo) berisi `message_id`, `chat_id`, `topic_id`, `is_global`, dan daftar service DOWN. Interface `repository.BatchStateStore` diimplementasikan SQL & Mongo; alert manager memuatnya kembali secara lazy (`hydrateBatch`) saat event pertama untuk lembaga itu datang, sehingga pesan lama diedit, bukan dikirim ulang. State dihapus saat semua service pulih atau institusi dihapus. Bot token tidak disimpan di tabel ini — target di-resolve ulang dari settings saat edit, jadi rotasi token tetap aman.
+
+---
+
 
 ---
 

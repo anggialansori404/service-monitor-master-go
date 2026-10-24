@@ -82,6 +82,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if input.DailyDigestTime == "" {
 		input.DailyDigestTime = "08:00"
 	}
+	if _, _, ok := digest.ParseDigestTime(input.DailyDigestTime); !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid daily_digest_time format. Expected HH:MM"})
+		return
+	}
 
 	setting := models.GlobalSetting{
 		TelegramBotToken:     input.TelegramBotToken,
@@ -143,7 +147,17 @@ func (h *SettingHandler) TestAlert(c *gin.Context) {
 
 // TestDailyDigest triggers an immediate test run of the daily health digest.
 func (h *SettingHandler) TestDailyDigest(c *gin.Context) {
-	err := digest.SendDailyDigest(c.Request.Context(), h.Repo)
+	setting, err := h.Repo.GetSettings(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch settings"})
+		return
+	}
+	if !setting.EnableDailyDigest {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Laporan harian sedang dinonaktifkan. Aktifkan switch Laporan Harian lalu simpan dulu."})
+		return
+	}
+
+	err = digest.SendDailyDigest(c.Request.Context(), h.Repo)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Gagal mengirim daily digest: %v", err)})
 		return

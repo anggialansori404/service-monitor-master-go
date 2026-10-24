@@ -226,6 +226,7 @@ func (r *SQLRepository) DeleteInstitution(id string) error {
 	r.db.Where("institution_id = ?", id).Delete(&models.IncidentLog{})
 	r.db.Where("institution_id = ?", id).Delete(&models.ScheduleRun{})
 	r.db.Where("institution_id = ?", id).Delete(&models.Schedule{})
+	r.db.Where("institution_id = ?", id).Delete(&models.AlertBatchState{})
 
 	result := r.db.Where("id = ?", id).Delete(&models.Institution{})
 	if result.Error != nil {
@@ -960,6 +961,31 @@ func (r *SQLRepository) GetRecentIncidentsCountByInstitution(ctx context.Context
 func (r *SQLRepository) PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error) {
 	result := r.db.WithContext(ctx).Where("started_at < ?", olderThan).Delete(&models.IncidentLog{})
 	return result.RowsAffected, result.Error
+}
+
+// GetAlertBatchState returns the persisted critical batch alert of an institution,
+// or (nil, nil) when no batch is active.
+func (r *SQLRepository) GetAlertBatchState(ctx context.Context, instID string) (*models.AlertBatchState, error) {
+	var state models.AlertBatchState
+	err := r.db.WithContext(ctx).Where("institution_id = ?", instID).First(&state).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &state, nil
+}
+
+// SaveAlertBatchState upserts the active batch alert of an institution.
+func (r *SQLRepository) SaveAlertBatchState(ctx context.Context, state *models.AlertBatchState) error {
+	state.UpdatedAt = time.Now().Local()
+	return r.db.WithContext(ctx).Save(state).Error
+}
+
+// DeleteAlertBatchState removes the tracked batch alert of an institution.
+func (r *SQLRepository) DeleteAlertBatchState(ctx context.Context, instID string) error {
+	return r.db.WithContext(ctx).Where("institution_id = ?", instID).Delete(&models.AlertBatchState{}).Error
 }
 
 // GetUptimeStats calculates daily uptime percentage and incidents count over specified days.

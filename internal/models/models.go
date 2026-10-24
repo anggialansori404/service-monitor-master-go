@@ -121,3 +121,23 @@ type BlacklistedIP struct {
 	Reason    string    `json:"reason" bson:"reason"`
 	CreatedAt time.Time `json:"created_at" bson:"created_at"`
 }
+
+// AlertBatchMessage identifies one Telegram message carrying a batch alert.
+// The bot token is deliberately not stored: it is resolved from the current
+// institution/global settings when the message needs editing, so no extra copy
+// of a credential lives in this table.
+type AlertBatchMessage struct {
+	ChatID    string `json:"chat_id" bson:"chat_id"`
+	TopicID   string `json:"topic_id" bson:"topic_id"`
+	IsGlobal  bool   `json:"is_global" bson:"is_global"`
+	MessageID int    `json:"message_id" bson:"message_id"`
+}
+
+// AlertBatchState persists the active critical batch alert of one institution so
+// a master restart edits the existing Telegram message instead of posting a new one.
+type AlertBatchState struct {
+	InstitutionID string              `json:"institution_id" bson:"_id" gorm:"primaryKey"`
+	Messages      []AlertBatchMessage `json:"messages" bson:"messages" gorm:"serializer:json"`
+	DownServices  []string            `json:"down_services" bson:"down_services" gorm:"serializer:json"`
+	UpdatedAt     time.Time           `json:"updated_at" bson:"updated_at"`
+}

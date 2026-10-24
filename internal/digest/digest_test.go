@@ -2,13 +2,18 @@ package digest_test
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"monitoring-master/internal/digest"
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
+	"monitoring-master/internal/services"
 )
 
 func TestBuildGlobalDigestMessage(t *testing.T) {
@@ -142,8 +147,11 @@ func TestSendDailyDigest(t *testing.T) {
 	}
 
 	err = digest.SendDailyDigest(ctx, repo)
-	if err != nil {
-		t.Fatalf("unexpected error running SendDailyDigest: %v", err)
+	if err == nil {
+		t.Fatalf("expected an error when no telegram destination is configured, got nil")
+	}
+	if !strings.Contains(err.Error(), "no telegram destination") {
+		t.Fatalf("expected a no-destination error, got: %v", err)
 	}
 
 	if !repo.calledInstIncidents["inst-1"] {
@@ -151,5 +159,94 @@ func TestSendDailyDigest(t *testing.T) {
 	}
 	if !repo.calledInstIncidents["inst-2"] {
 		t.Errorf("expected GetRecentIncidentsCountByInstitution called for inst-2")
+	}
+}
+
+func TestShouldSendDigest(t *testing.T) {
+	jakarta := time.FixedZone("WIB", 7*3600)
+	at := func(hour, minute int) time.Time {
+		return time.Date(2026, 10, 24, hour, minute, 0, 0, jakarta)
+	}
+
+	cases := []struct {
+		name         string
+		now          time.Time
+		digestTime   string
+		lastSentDate string
+		want         bool
+	}{
+		{"before target", at(7, 59), "08:00", "", false},
+		{"exactly at target", at(8, 0), "08:00", "", true},
+		{"inside catch-up window", at(8, 12), "08:00", "", true},
+		{"after catch-up window", at(8, 16), "08:00", "", false},
+		{"already sent today", at(8, 5), "08:00", "2026-10-24", false},
+		{"sent yesterday", at(8, 5), "08:00", "2026-10-23", true},
+		{"empty time falls back to 08:00", at(8, 1), "", "", true},
+		{"unpadded hour", at(8, 1), "8:00", "", true},
+		{"with seconds", at(8, 1), "08:00:00", "", true},
+		{"malformed never fires", at(8, 1), "8 pagi", "", false},
+		{"out of range never fires", at(8, 1), "25:00", "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := digest.ShouldSendDigest(tc.now, tc.digestTime, tc.lastSentDate); got != tc.want {
+				t.Fatalf("ShouldSendDigest(%s, %q, %q) = %v, want %v",
+					tc.now.Format("15:04"), tc.digestTime, tc.lastSentDate, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSendDailyDigestDispatchesGlobalMessage(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	var bodies []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true,"result":{"message_id":42}}`))
+	}))
+	defer ts.Close()
+	services.SetTelegramBaseURLForTest(ts.URL)
+	defer services.ResetTelegramBaseURLForTest()
+
+	repo := &mockDigestRepo{
+		settings: &models.GlobalSetting{
+			EnableDailyDigest: true,
+			TelegramBotToken:  "123:abc",
+			TelegramChatID:    "-100200",
+			TelegramTopicID:   "7",
+		},
+		institutions: []models.Institution{{ID: "inst-1", Name: "CUKK Branchless"}},
+		services: map[string][]models.Service{
+			"inst-1": {{Name: "Core Banking", Status: "DOWN"}},
+		},
+		instIncidentsCount:   map[string]int64{"inst-1": 2},
+		globalIncidentsCount: 2,
+	}
+
+	if err := digest.SendDailyDigest(context.Background(), repo); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 {
+		t.Fatalf("expected exactly 1 telegram request, got %d (%v)", len(paths), paths)
+	}
+	if paths[0] != "/bot123:abc/sendMessage" {
+		t.Fatalf("unexpected telegram path: %s", paths[0])
+	}
+	if !strings.Contains(bodies[0], "LAPORAN MONITORING HARIAN") {
+		t.Fatalf("expected global digest body, got: %s", bodies[0])
+	}
+	if !strings.Contains(bodies[0], "-100200") || !strings.Contains(bodies[0], "message_thread_id") {
+		t.Fatalf("expected chat id and topic in payload, got: %s", bodies[0])
 	}
 }

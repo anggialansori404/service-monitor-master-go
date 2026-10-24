@@ -4,12 +4,52 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
 	"monitoring-master/internal/services"
 )
+
+// digestCatchUpWindow is how long after the configured time the daily digest may
+// still be dispatched. Covers a master restart or a missed scheduler tick without
+// letting a late boot push the report far past its slot.
+const digestCatchUpWindow = 15 * time.Minute
+
+// ParseDigestTime parses a configured digest time. "HH:MM" is the canonical form;
+// "H:MM" and "HH:MM:SS" are accepted so legacy or hand-edited values still schedule.
+func ParseDigestTime(value string) (hour, minute int, ok bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, 0, false
+	}
+	hour, errHour := strconv.Atoi(strings.TrimSpace(parts[0]))
+	minute, errMinute := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errHour != nil || errMinute != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, 0, false
+	}
+	return hour, minute, true
+}
+
+// ShouldSendDigest reports whether today's digest is due: the configured time has
+// been reached (within the catch-up window) and nothing was sent yet today.
+// lastSentDate is the "2006-01-02" date of the previous dispatch, empty on boot.
+func ShouldSendDigest(now time.Time, digestTime, lastSentDate string) bool {
+	if strings.TrimSpace(digestTime) == "" {
+		digestTime = "08:00"
+	}
+	hour, minute, ok := ParseDigestTime(digestTime)
+	if !ok {
+		return false
+	}
+	target := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+	if now.Before(target) || now.After(target.Add(digestCatchUpWindow)) {
+		return false
+	}
+	return now.Format("2006-01-02") != lastSentDate
+}
 
 // BuildGlobalDigestMessage formats a markdown summary of all institutions and services.
 func BuildGlobalDigestMessage(totalNodes, onlineNodes, totalServices, runningServices, downServices int, incidents24h int64, t time.Time) string {
@@ -175,6 +215,8 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 
 	totalIncidents24h, _ := repo.GetRecentIncidentsCount(ctx, since24h)
 
+	sentCount := 0
+
 	// 2. Dispatch to Global Admin group if configured
 	if setting.TelegramBotToken != "" && setting.TelegramChatID != "" {
 		globalMsg := BuildGlobalDigestMessage(totalNodes, onlineNodes, totalServices, runningServices, downServices, totalIncidents24h, now)
@@ -182,6 +224,7 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 		if err != nil {
 			log.Printf("[DAILY DIGEST ERROR] Failed to send global digest: %v", err)
 		} else {
+			sentCount++
 			log.Println("[DAILY DIGEST] Successfully sent global daily digest.")
 		}
 	}
@@ -200,9 +243,14 @@ func SendDailyDigest(ctx context.Context, repo repository.Repository) error {
 			if err != nil {
 				log.Printf("[DAILY DIGEST ERROR] Failed to send custom digest to %s: %v", inst.Name, err)
 			} else {
+				sentCount++
 				log.Printf("[DAILY DIGEST] Sent custom digest to %s (chat %s)", inst.Name, inst.TelegramChatID)
 			}
 		}
+	}
+
+	if sentCount == 0 {
+		return fmt.Errorf("no telegram destination configured or every dispatch failed (global bot/chat unset and no institution uses a custom bot)")
 	}
 
 	return nil

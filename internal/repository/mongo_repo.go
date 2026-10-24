@@ -335,6 +335,9 @@ func (r *MongoRepository) DeleteInstitution(id string) error {
 	incidentColl := r.db.Collection("incident_logs")
 	_, _ = incidentColl.DeleteMany(context.TODO(), bson.M{"institution_id": id})
 
+	// Delete the tracked alert batch message state
+	_, _ = r.db.Collection("alert_batch_states").DeleteOne(context.TODO(), bson.M{"_id": id})
+
 	// Delete associated schedules and schedule runs
 	schedulesColl := r.db.Collection("schedules")
 	_, _ = schedulesColl.DeleteMany(context.TODO(), bson.M{"institution_id": id})
@@ -1532,6 +1535,35 @@ func (r *MongoRepository) PurgeIncidents(ctx context.Context, olderThan time.Tim
 		return 0, err
 	}
 	return res.DeletedCount, nil
+}
+
+// GetAlertBatchState returns the persisted critical batch alert of an institution,
+// or (nil, nil) when no batch is active.
+func (r *MongoRepository) GetAlertBatchState(ctx context.Context, instID string) (*models.AlertBatchState, error) {
+	var state models.AlertBatchState
+	err := r.db.Collection("alert_batch_states").FindOne(ctx, bson.M{"_id": instID}).Decode(&state)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	state.InstitutionID = instID
+	return &state, nil
+}
+
+// SaveAlertBatchState upserts the active batch alert of an institution.
+func (r *MongoRepository) SaveAlertBatchState(ctx context.Context, state *models.AlertBatchState) error {
+	state.UpdatedAt = time.Now().Local()
+	opts := options.Replace().SetUpsert(true)
+	_, err := r.db.Collection("alert_batch_states").ReplaceOne(ctx, bson.M{"_id": state.InstitutionID}, state, opts)
+	return err
+}
+
+// DeleteAlertBatchState removes the tracked batch alert of an institution.
+func (r *MongoRepository) DeleteAlertBatchState(ctx context.Context, instID string) error {
+	_, err := r.db.Collection("alert_batch_states").DeleteOne(ctx, bson.M{"_id": instID})
+	return err
 }
 
 // GetUptimeStats calculates daily uptime percentage and incidents count over specified days.

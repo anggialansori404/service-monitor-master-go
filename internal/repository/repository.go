@@ -96,3 +96,13 @@ type Repository interface {
 	GetRecentIncidentsCountByInstitution(ctx context.Context, instID string, since time.Time) (int64, error)
 	PurgeIncidents(ctx context.Context, olderThan time.Time) (int64, error)
 }
+
+// BatchStateStore persists the active critical batch alert of an institution so
+// a master restart edits the existing Telegram message instead of posting a new
+// one. Kept out of Repository so the many small test doubles stay small; the
+// alert manager asserts for it and degrades to in-memory state when absent.
+type BatchStateStore interface {
+	GetAlertBatchState(ctx context.Context, instID string) (*models.AlertBatchState, error)
+	SaveAlertBatchState(ctx context.Context, state *models.AlertBatchState) error
+	DeleteAlertBatchState(ctx context.Context, instID string) error
+}
