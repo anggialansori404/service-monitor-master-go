@@ -2,12 +2,14 @@ package scheduler
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"monitoring-master/internal/models"
 	"monitoring-master/internal/repository"
+	"monitoring-master/internal/ws"
 )
 
 // --- Mock ScheduleRepository ---
@@ -398,5 +400,52 @@ func TestParseLocationAliases(t *testing.T) {
 		if loc.String() != tc.expected {
 			t.Errorf("ParseLocation(%q) = %s, expected %s", tc.input, loc.String(), tc.expected)
 		}
+	}
+}
+
+// A scheduled run whose services cannot be restarted must record the agent's
+// reason, not just a failure count.
+func TestExecuteSchedule_MencatatAlasanKegagalan(t *testing.T) {
+	repo := newMockRepo()
+	seedSchedule(repo, "sched-1", "Uji Gagal", "0 2 * * *", true)
+
+	s, err := New(repo, ws.NewRegistry())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Stop()
+
+	schedule := repo.scheduleRepo.schedules["sched-1"]
+	schedule.ServiceNames = []string{"nginx", "redis"}
+	s.executeSchedule(schedule)
+
+	runs := repo.scheduleRepo.runs["sched-1"]
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 run recorded, got %d", len(runs))
+	}
+	run := runs[0]
+	if run.Status != "FAILED" {
+		t.Fatalf("expected FAILED with no agent connected, got %s", run.Status)
+	}
+	if !strings.Contains(run.ResultMessage, "agent offline") {
+		t.Fatalf("expected the agent-offline reason in the result message, got %q", run.ResultMessage)
+	}
+	if !strings.Contains(run.ResultMessage, "nginx") {
+		t.Fatalf("expected the failing service name in the result message, got %q", run.ResultMessage)
+	}
+}
+
+// A reply that arrives before the scheduler starts waiting must still be seen.
+func TestPendingChannel_BalasanCepatTidakHilang(t *testing.T) {
+	ch := make(chan ws.WsResponse, 1)
+	ch <- ws.WsResponse{"success": true}
+
+	select {
+	case resp := <-ch:
+		if ok, _ := resp["success"].(bool); !ok {
+			t.Fatalf("expected success response, got %v", resp)
+		}
+	default:
+		t.Fatalf("buffered channel lost the reply")
 	}
 }

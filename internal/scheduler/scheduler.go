@@ -219,7 +219,10 @@ func (s *ServiceScheduler) executeSchedule(schedule *models.Schedule) {
 	for _, serviceName := range schedule.ServiceNames {
 		reqID := fmt.Sprintf("sched-%s-%d", schedule.ID, time.Now().UnixNano())
 
-		respChan := make(chan ws.WsResponse)
+		// Buffered: the WS handler forwards responses with a non-blocking send,
+		// so an unbuffered channel would silently drop a fast agent reply and
+		// leave this loop waiting for the full timeout.
+		respChan := make(chan ws.WsResponse, 1)
 		s.registry.PendingRequests.Store(reqID, respChan)
 
 		payload := map[string]interface{}{
@@ -266,6 +269,11 @@ func (s *ServiceScheduler) executeSchedule(schedule *models.Schedule) {
 	}
 
 	resultMsg := fmt.Sprintf("restarted %d/%d services (%d failed)", successCount, len(schedule.ServiceNames), failCount)
+	if failCount > 0 {
+		// Keep the agent's reason visible: without it the UI only shows a count
+		// and the operator cannot tell a refusal from a timeout.
+		resultMsg += ": " + strings.Join(resultMessages, "; ")
+	}
 	now := time.Now()
 
 	run := models.ScheduleRun{

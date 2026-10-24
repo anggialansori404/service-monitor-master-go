@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"monitoring-master/internal/models"
@@ -482,6 +483,18 @@ func (h *ScheduleHandler) TriggerSchedule(c *gin.Context) {
 
 	// Build result message.
 	resultMsg := fmt.Sprintf("restarted %d/%d services (%d failed)", successCount, len(schedule.ServiceNames), failCount)
+	if failCount > 0 {
+		reasons := make([]string, 0, len(results))
+		for _, r := range results {
+			if r["status"] == "SUCCESS" {
+				continue
+			}
+			reasons = append(reasons, fmt.Sprintf("%s: %v", r["service"], r["message"]))
+		}
+		if len(reasons) > 0 {
+			resultMsg += ": " + strings.Join(reasons, "; ")
+		}
+	}
 
 	now := time.Now()
 	run := models.ScheduleRun{

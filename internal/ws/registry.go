@@ -139,7 +139,9 @@ func (r *Registry) ConnectedCount() int {
 func (r *Registry) RequestRestart(agentID, serviceName string, timeout time.Duration) (WsResponse, error) {
 	reqID := fmt.Sprintf("req-%d", time.Now().UnixNano())
 
-	respChan := make(chan WsResponse)
+	// Buffered so the non-blocking forward in the WS handler cannot drop a
+	// reply that arrives before this goroutine starts waiting.
+	respChan := make(chan WsResponse, 1)
 	r.PendingRequests.Store(reqID, respChan)
 	defer r.PendingRequests.Delete(reqID)
 

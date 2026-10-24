@@ -5,6 +5,24 @@
 
 ---
 
+## [v1.2.7] - 2026-10-24 - Scheduled Restart: Alasan Kegagalan Tidak Lagi Hilang
+
+---
+
+### service-monitor-master-go
+
+#### fix(scheduler): Balasan agent yang cepat tidak lagi hilang
+- **Files**: `internal/scheduler/scheduler.go`, `internal/ws/registry.go`
+- **Problem**: Channel penampung balasan dibuat unbuffered, sedangkan handler WS meneruskan `restart_result` dengan `select { case ch <- msg: default: }`. Bila agent membalas sebelum goroutine scheduler mencapai `select`, balasan dibuang dan run menunggu penuh 10 detik lalu tercatat `timeout` — padahal restart berhasil.
+- **Fix**: Channel diberi buffer 1 di `executeSchedule` dan `Registry.RequestRestart`, sehingga forward non-blocking selalu berhasil.
+
+#### fix(scheduler): Run yang gagal kini menyimpan alasan dari agent
+- **Files**: `internal/scheduler/scheduler.go`, `internal/api/handlers/schedule.go`
+- **Problem**: `ResultMessage` hanya berisi `restarted 0/2 services (2 failed)`. Pesan agent (mis. `SECURITY ALERT: Command injection detected!`) dibuang, sehingga operator tidak bisa membedakan penolakan agent, agent offline, dan timeout.
+- **Fix**: Alasan per service ditambahkan ke `ResultMessage` pada jalur terjadwal maupun trigger manual, sehingga riwayat run di MonitorHub menampilkan penyebab sebenarnya.
+
+---
+
 ## [v1.2.6] - 2026-10-24 - Daily Digest Reliability & Batch Alert Edit-in-Place
 
 ---
