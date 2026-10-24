@@ -211,12 +211,20 @@ func (s *ServiceScheduler) executeSchedule(schedule *models.Schedule) {
 		return
 	}
 
-	// Execute restart for each service.
+	// Resolve schedule entries to the canonical service names the agent knows.
+	// A schedule may hold DisplayName, Name, or both for the same service.
+	known, _, _ := s.repo.GetServicesByInstitution(schedule.InstitutionID, "", "", 1, 5000)
+	serviceNames, unknown := ResolveServiceNames(schedule.ServiceNames, known)
+
 	successCount := 0
 	failCount := 0
-	resultMessages := make([]string, 0, len(schedule.ServiceNames))
+	resultMessages := make([]string, 0, len(serviceNames)+len(unknown))
+	for _, entry := range unknown {
+		failCount++
+		resultMessages = append(resultMessages, fmt.Sprintf("%s: service not found on agent config", entry))
+	}
 
-	for _, serviceName := range schedule.ServiceNames {
+	for _, serviceName := range serviceNames {
 		reqID := fmt.Sprintf("sched-%s-%d", schedule.ID, time.Now().UnixNano())
 
 		// Buffered: the WS handler forwards responses with a non-blocking send,
@@ -268,7 +276,7 @@ func (s *ServiceScheduler) executeSchedule(schedule *models.Schedule) {
 		status = "PARTIAL"
 	}
 
-	resultMsg := fmt.Sprintf("restarted %d/%d services (%d failed)", successCount, len(schedule.ServiceNames), failCount)
+	resultMsg := fmt.Sprintf("restarted %d/%d services (%d failed)", successCount, len(serviceNames)+len(unknown), failCount)
 	if failCount > 0 {
 		// Keep the agent's reason visible: without it the UI only shows a count
 		// and the operator cannot tell a refusal from a timeout.

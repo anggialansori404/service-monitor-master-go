@@ -124,6 +124,7 @@ func (m *mockScheduleRepo) PurgeScheduleRuns(_ context.Context, _ time.Time) (in
 
 type mockRepo struct {
 	scheduleRepo *mockScheduleRepo
+	services     []models.Service
 }
 
 func newMockRepo() *mockRepo {
@@ -156,7 +157,7 @@ func (m *mockRepo) CreateInstitution(_ *models.Institution) error               
 func (m *mockRepo) UpdateInstitution(_ *models.Institution) error                 { return nil }
 func (m *mockRepo) DeleteInstitution(_ string) error                             { return nil }
 func (m *mockRepo) GetServicesByInstitution(_ string, _ string, _ string, _, _ int) ([]models.Service, int64, error) {
-	return nil, 0, nil
+	return m.services, int64(len(m.services)), nil
 }
 func (m *mockRepo) GetService(_ string, _ string) (*models.Service, error)       { return nil, nil }
 func (m *mockRepo) UpsertService(_ context.Context, _ *models.Service) error      { return nil }
@@ -407,6 +408,7 @@ func TestParseLocationAliases(t *testing.T) {
 // reason, not just a failure count.
 func TestExecuteSchedule_MencatatAlasanKegagalan(t *testing.T) {
 	repo := newMockRepo()
+	repo.services = []models.Service{{Name: "nginx"}, {Name: "redis"}}
 	seedSchedule(repo, "sched-1", "Uji Gagal", "0 2 * * *", true)
 
 	s, err := New(repo, ws.NewRegistry())

@@ -128,6 +128,21 @@ func (h *ScheduleHandler) CreateSchedule(c *gin.Context) {
 		return
 	}
 
+	// Normalize to canonical service names. Older clients stored DisplayName,
+	// which the agent cannot resolve, and stored both forms as duplicates.
+	known, _, err := h.Repo.GetServicesByInstitution(req.InstitutionID, "", "", 1, 5000)
+	if err != nil {
+		log.Printf("CreateSchedule service lookup error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to validate services"})
+		return
+	}
+	normalized, unknown := scheduler.ResolveServiceNames(req.ServiceNames, known)
+	if len(unknown) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown service(s) for this institution: " + strings.Join(unknown, ", ")})
+		return
+	}
+	req.ServiceNames = normalized
+
 	now := time.Now()
 	schedule := models.Schedule{
 		ID:            uuid.New().String(),
@@ -267,7 +282,18 @@ func (h *ScheduleHandler) UpdateSchedule(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "service_names must not be empty"})
 			return
 		}
-		existing.ServiceNames = *req.ServiceNames
+		known, _, err := h.Repo.GetServicesByInstitution(existing.InstitutionID, "", "", 1, 5000)
+		if err != nil {
+			log.Printf("UpdateSchedule service lookup error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to validate services"})
+			return
+		}
+		normalized, unknown := scheduler.ResolveServiceNames(*req.ServiceNames, known)
+		if len(unknown) > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown service(s) for this institution: " + strings.Join(unknown, ", ")})
+			return
+		}
+		existing.ServiceNames = normalized
 		changed = true
 	}
 
@@ -442,11 +468,25 @@ func (h *ScheduleHandler) TriggerSchedule(c *gin.Context) {
 		return
 	}
 
-	results := make([]gin.H, 0, len(schedule.ServiceNames))
+	// Resolve schedule entries to the canonical service names the agent knows:
+	// a schedule may hold DisplayName, Name, or both for the same service, and
+	// the agent only answers to Name.
+	known, _, _ := h.Repo.GetServicesByInstitution(schedule.InstitutionID, "", "", 1, 5000)
+	serviceNames, unknown := scheduler.ResolveServiceNames(schedule.ServiceNames, known)
+
+	results := make([]gin.H, 0, len(serviceNames)+len(unknown))
 	successCount := 0
 	failCount := 0
+	for _, entry := range unknown {
+		failCount++
+		results = append(results, gin.H{
+			"service": entry,
+			"status":  "FAILED",
+			"message": "service not found on agent config",
+		})
+	}
 
-	for _, serviceName := range schedule.ServiceNames {
+	for _, serviceName := range serviceNames {
 		func() {
 			result := gin.H{"service": serviceName, "status": "FAILED", "message": ""}
 
@@ -482,7 +522,7 @@ func (h *ScheduleHandler) TriggerSchedule(c *gin.Context) {
 	}
 
 	// Build result message.
-	resultMsg := fmt.Sprintf("restarted %d/%d services (%d failed)", successCount, len(schedule.ServiceNames), failCount)
+	resultMsg := fmt.Sprintf("restarted %d/%d services (%d failed)", successCount, len(serviceNames)+len(unknown), failCount)
 	if failCount > 0 {
 		reasons := make([]string, 0, len(results))
 		for _, r := range results {

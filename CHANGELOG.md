@@ -5,6 +5,30 @@
 
 ---
 
+## [v1.2.8] - 2026-10-24 - Scheduled Restart: Display Name Tidak Lagi Dikirim ke Agent
+
+---
+
+### service-monitor-master-go
+
+#### fix(schedule): `service_names` berisi display_name membuat separuh restart gagal
+- **Files**: `internal/scheduler/resolve.go` (baru), `internal/scheduler/scheduler.go`, `internal/api/handlers/schedule.go`
+- **Problem**: Baris schedule dapat berisi `name` **dan** `display_name` untuk service yang sama. Agent hanya me-lookup `name` (`serviceMap[serviceName]`), sehingga setiap entri display_name dijawab `success:false, "Service not found in agent configuration"`. Gejalanya persis seperti laporan: 4 service → 8 perintah, `restarted 4/8 services (4 failed)`.
+- **Fix**:
+  - `scheduler.ResolveServiceNames` memetakan entri (Name **atau** DisplayName, case-insensitive) ke Name kanonik dan membuang duplikat.
+  - Dipakai di jalur terjadwal (`executeSchedule`) dan trigger manual (`TriggerSchedule`); entri yang tidak dikenal dilaporkan sebagai `service not found on agent config` alih-alih dikirim mentah.
+  - `CreateSchedule`/`UpdateSchedule` menormalkan `service_names` ke Name kanonik dan menolak service yang tidak dikenal, sehingga data baru tidak lagi menyimpan display_name.
+  - Bila katalog service kosong (agent belum pernah sync), entri diteruskan apa adanya agar schedule lama tidak ikut ditolak.
+
+### MonitorHub
+
+#### fix(schedule): hitungan aktif & form edit memahami display_name
+- **Files**: `src/app/(protected)/scheduled-restart/page.tsx`
+- **Problem**: Baris schedule lama menyimpan display_name, sehingga `service_names.includes(svc.name)` tidak pernah cocok — badge menampilkan `0/4 Active` dan form edit terbuka tanpa service terpilih.
+- **Fix**: Helper `resolveScheduledServices` mencocokkan Name maupun DisplayName (case-insensitive, tanpa duplikat) untuk badge dan form edit.
+
+---
+
 ## [v1.2.7] - 2026-10-24 - Scheduled Restart: Alasan Kegagalan Tidak Lagi Hilang
 
 ---
